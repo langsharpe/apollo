@@ -1,6 +1,7 @@
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
-import { Notice, PluginSettingTab, SettingDefinitionItem } from "obsidian";
+import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
+import type ApolloPlugin from "./main";
 
 /** Permission modes a chat can use (PRM-T1). Bypass is deliberately absent in v1. */
 export const PERMISSION_MODES = {
@@ -12,20 +13,48 @@ export const PERMISSION_MODES = {
 
 export type ChatPermissionMode = keyof typeof PERMISSION_MODES;
 
+/** Where new chats open (TAB-2). */
+export const CHAT_PLACEMENTS = {
+	tab: "New tab",
+	"split-right": "Split right",
+	"split-down": "Split down",
+	"right-sidebar": "Right sidebar",
+} as const;
+
+export type ChatPlacement = keyof typeof CHAT_PLACEMENTS;
+
 export interface ApolloSettings {
 	/** Absolute path to the `claude` binary. Empty means auto-detect. */
 	cliPath: string;
 	/** Permission mode for new chats. */
 	defaultPermissionMode: ChatPermissionMode;
+	openChatsIn: ChatPlacement;
+	/** Minutes an idle chat keeps its Claude Code process. 0 keeps it until the chat closes. */
+	idleTimeoutMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: ApolloSettings = {
 	cliPath: "",
 	defaultPermissionMode: "default",
+	openChatsIn: "split-right",
+	idleTimeoutMinutes: 10,
 };
 
-// The base PluginSettingTab reads from and persists `plugin.settings` by control key.
+// The base PluginSettingTab reads `plugin.settings` by control key. Writes go
+// through the plugin, because data.json also holds chat metadata.
 export class ApolloSettingTab extends PluginSettingTab {
+	constructor(
+		app: App,
+		private readonly plugin: ApolloPlugin,
+	) {
+		super(app, plugin);
+	}
+
+	override async setControlValue(key: string, value: unknown): Promise<void> {
+		(this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
+		await this.plugin.save();
+	}
+
 	override getSettingDefinitions(): SettingDefinitionItem[] {
 		return [
 			{
@@ -53,6 +82,25 @@ export class ApolloSettingTab extends PluginSettingTab {
 					type: "dropdown",
 					key: "defaultPermissionMode" satisfies keyof ApolloSettings,
 					options: PERMISSION_MODES,
+				},
+			},
+			{
+				name: "Open new chats in",
+				desc: "Where new chats, resumed chats and forks open.",
+				control: {
+					type: "dropdown",
+					key: "openChatsIn" satisfies keyof ApolloSettings,
+					options: CHAT_PLACEMENTS,
+				},
+			},
+			{
+				name: "Idle process timeout",
+				desc: "Minutes before an idle chat stops its Claude Code process. The chat resumes on your next message. 0 keeps the process until the chat closes.",
+				control: {
+					type: "number",
+					key: "idleTimeoutMinutes" satisfies keyof ApolloSettings,
+					min: 0,
+					step: 1,
 				},
 			},
 		];

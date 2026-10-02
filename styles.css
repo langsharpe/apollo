@@ -18,6 +18,10 @@
 	color: var(--text-faint);
 }
 
+.apollo-msg {
+	position: relative;
+}
+
 .apollo-msg.apollo-user {
 	align-self: flex-end;
 	max-width: 85%;
@@ -43,6 +47,25 @@
 
 .apollo-msg.apollo-error {
 	color: var(--text-error);
+}
+
+/* Per-message actions, shown on hover. */
+.apollo-msg-actions {
+	position: absolute;
+	top: calc(-1 * var(--size-4-3));
+	right: var(--size-4-1);
+	display: none;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+}
+
+.apollo-msg:hover > .apollo-msg-actions {
+	display: flex;
+}
+
+.apollo-msg-actions .clickable-icon {
+	padding: var(--size-2-1);
 }
 
 /* Tool calls: one compact row each. */
@@ -240,4 +263,141 @@
 	display: flex;
 	gap: var(--size-4-2);
 	margin-left: auto;
+}
+
+/* Status dot on the chat's tab icon (TAB-4). Idle chats show none. */
+.workspace-tab-header[data-apollo-status] .workspace-tab-header-inner-icon {
+	position: relative;
+}
+
+.workspace-tab-header[data-apollo-status] .workspace-tab-header-inner-icon::after {
+	content: "";
+	position: absolute;
+	top: 0;
+	right: -2px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+}
+
+.workspace-tab-header[data-apollo-status="running"] .workspace-tab-header-inner-icon::after {
+	background: var(--color-green);
+}
+
+.workspace-tab-header[data-apollo-status="awaiting"] .workspace-tab-header-inner-icon::after {
+	background: var(--color-orange);
+}
+
+.workspace-tab-header[data-apollo-status="error"] .workspace-tab-header-inner-icon::after {
+	background: var(--color-red);
+}
+
+/* Chat list. */
+.apollo-sessions {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2);
+}
+
+.apollo-sessions-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+}
+
+.apollo-sessions-header .search-input-container {
+	flex: 1;
+}
+
+.apollo-sessions-list {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	overflow-y: auto;
+}
+
+.apollo-sessions-heading {
+	margin-top: var(--size-4-2);
+	padding: 0 var(--size-4-2);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+}
+
+.apollo-sessions-empty {
+	padding: var(--size-4-4);
+	color: var(--text-faint);
+	text-align: center;
+}
+
+.apollo-session {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	padding: var(--size-4-1) var(--size-4-2);
+	padding-left: calc(var(--size-4-2) + var(--apollo-depth, 0) * var(--size-4-4));
+	border-radius: var(--radius-s);
+	cursor: var(--cursor);
+}
+
+.apollo-session:hover {
+	background: var(--background-modifier-hover);
+}
+
+.apollo-session.is-open {
+	border-left: 2px solid var(--interactive-accent);
+}
+
+.apollo-session-main {
+	flex: 1;
+	min-width: 0;
+}
+
+.apollo-session-title {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-session-title > span:last-child {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.apollo-session-icon {
+	display: flex;
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+
+.apollo-session-icon svg {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.apollo-session-meta {
+	display: flex;
+	gap: var(--size-4-2);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-session-open {
+	color: var(--text-accent);
+}
+
+.apollo-session-more {
+	visibility: hidden;
+}
+
+.apollo-session:hover .apollo-session-more {
+	visibility: visible;
+}
+
+.apollo-modal-input {
+	width: 100%;
 }

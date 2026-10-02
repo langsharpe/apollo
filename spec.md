@@ -69,7 +69,7 @@ Key decisions:
 | HIST-1 | A sidebar `SessionListView` lists sessions for this vault using the SDK's `listSessions({ dir: vaultPath })`, newest first. |
 | HIST-2 | Shows title, last updated, and whether it is open in a tab. Search by title. |
 | HIST-3 | Actions: **Open** (resume in new tab, or focus if already open), **Fork** (`forkSession: true`), **Rename**, **Pin**, **Delete** (with confirm; uses SDK `deleteSession`). |
-| HIST-3a | **Fork from any message.** Every user and assistant message has a *Fork from here* action. It opens a new tab whose session branches at that message (`resume` + `resumeSessionAt: <message uuid>` + `forkSession: true`), leaving the original untouched. The forked tab's title records its parent, and the chat list can group forks under their parent. |
+| HIST-3a | **Fork from any message.** Every user and assistant message has a *Fork from here* action. It opens a new tab whose session branches at that message (SDK `forkSession(id, { upToMessageId })`, which writes the fork without starting a process; see [M2 findings](docs/m2-findings.md)), leaving the original untouched. Forking from a user message branches just before it and puts the message in the input to edit and resend. The forked tab's title records its parent, and the chat list can group forks under their parent. |
 | HIST-4 | Sessions started from the terminal in the vault directory appear in the list and can be resumed. Sessions started in the plugin can be resumed from the terminal with `claude --resume`. |
 | HIST-5 | Reopening a session replays its history into the view (SDK `getSessionMessages`). |
 | HIST-6 | Optional: "Copy chat link" producing `obsidian://apollo?session=<id>` to paste into notes. |
@@ -249,8 +249,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     includePartialMessages: true,
     abortController: chat.abort,
     ...(chat.sessionId ? { resume: chat.sessionId } : {}),
-    ...(chat.forkAt ? { resumeSessionAt: chat.forkAt } : {}),
-    ...(chat.fork ? { forkSession: true } : {}),
+    // Forks are made up front with forkSession(), then resumed like any session (M2).
   };
 }
 ```
@@ -289,7 +288,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 7. ~~Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.~~ **`'vertical'` gives side-by-side.**
 8. ~~How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.~~ **`permissionMode: 'auto'` alone is enough, on a model that supports it. Haiku doesn't, and silently falls back to `default`.** See [M1 findings](docs/m1-findings.md).
 9. ~~Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?~~ **Yes: core *New note in new pane*. M1 uses `Mod+Alt+N`, which is free.**
-10. Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.
+10. ~~Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.~~ **Any entry UUID works, for `resumeSessionAt` and `forkSession({ upToMessageId })` alike. Forking at a text block mid-turn is clean; forking at a tool_use whose result is cut off leaves Claude Code treating the call as failed, so Apollo only offers forks on text.** See [M2 findings](docs/m2-findings.md).
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.
 13. Slash commands via the SDK: confirm that sending `/skill-name args` as the prompt text runs the skill exactly as in the CLI, and whether `supportedCommands()` needs a live query or can be called cheaply at session start.

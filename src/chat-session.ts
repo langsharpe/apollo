@@ -8,13 +8,15 @@ export interface ChatSessionHandlers {
 	permission: CanUseTool;
 	/** The Claude Code process ended. `error` is set unless the session was closed on purpose. */
 	ended(error: unknown): void;
+	/** The process was stopped after sitting idle. The next message resumes the session. */
+	released(): void;
 }
 
 /**
  * One chat's connection to Claude Code. Holds a long-lived `query()` in
  * streaming-input mode, so the process stays warm between turns. The process
- * starts on the first message. If it exits, the next message starts a new one
- * that resumes the same session.
+ * starts on the first message. If it exits, or sits idle past the timeout
+ * (TAB-6), the next message starts a new one that resumes the same session.
  */
 export class ChatSession {
 	sessionId: string | null = null;
@@ -24,6 +26,7 @@ export class ChatSession {
 	private query: Query | null = null;
 	private input: MessageQueue | null = null;
 	private abort: AbortController | null = null;
+	private idleTimer: number | null = null;
 
 	constructor(
 		private readonly plugin: ApolloPlugin,
@@ -32,7 +35,14 @@ export class ChatSession {
 		public permissionMode: PermissionMode,
 	) {}
 
-	async send(text: string): Promise<void> {
+	/** Whether a Claude Code process is running for this chat. */
+	get running(): boolean {
+		return this.query !== null;
+	}
+
+	/** Sends a message. Returns its UUID, which is also its ID in the transcript. */
+	async send(text: string): Promise<string> {
+		this.clearIdleTimer();
 		this.busy = true;
 		try {
 			if (!this.input) await this.start();
@@ -40,12 +50,15 @@ export class ChatSession {
 			this.busy = false;
 			throw err;
 		}
+		const uuid = crypto.randomUUID();
 		this.input!.push({
 			type: "user",
 			message: { role: "user", content: text },
 			parent_tool_use_id: null,
 			origin: { kind: "human" },
+			uuid,
 		});
+		return uuid;
 	}
 
 	/** Stops the current turn. The process stays up for the next message. */
@@ -88,7 +101,10 @@ export class ChatSession {
 		try {
 			for await (const msg of q) {
 				if (msg.type === "system" && msg.subtype === "init") this.sessionId = msg.session_id;
-				if (msg.type === "result") this.busy = false;
+				if (msg.type === "result") {
+					this.busy = false;
+					this.startIdleTimer();
+				}
 				this.handlers.message(msg);
 			}
 		} catch (err) {
@@ -101,7 +117,25 @@ export class ChatSession {
 		this.handlers.ended(error ?? new Error("Claude Code exited."));
 	}
 
+	private startIdleTimer(): void {
+		this.clearIdleTimer();
+		const minutes = this.plugin.settings.idleTimeoutMinutes;
+		if (!(minutes > 0)) return;
+		this.idleTimer = window.setTimeout(() => {
+			this.idleTimer = null;
+			if (this.busy || !this.query) return;
+			this.close();
+			this.handlers.released();
+		}, minutes * 60_000);
+	}
+
+	private clearIdleTimer(): void {
+		if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+		this.idleTimer = null;
+	}
+
 	private reset(): void {
+		this.clearIdleTimer();
 		this.plugin.sessions.delete(this);
 		this.query = null;
 		this.input = null;
