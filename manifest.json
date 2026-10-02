@@ -1,0 +1,9 @@
+{
+	"id": "apollo",
+	"name": "Apollo",
+	"version": "0.0.1",
+	"minAppVersion": "1.13.0",
+	"description": "Run Claude Code inside your vault.",
+	"author": "Lang Sharpe",
+	"isDesktopOnly": true
+}

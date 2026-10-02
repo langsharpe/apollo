@@ -1,0 +1,19 @@
+{
+	"name": "apollo",
+	"version": "0.0.1",
+	"description": "Run Claude Code inside your Obsidian vault.",
+	"private": true,
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit && node esbuild.config.mjs production"
+	},
+	"author": "Lang Sharpe",
+	"license": "UNLICENSED",
+	"devDependencies": {
+		"@types/node": "^26.6.4",
+		"esbuild": "^0.28.2",
+		"obsidian": "^1.13.1",
+		"typescript": "^7.0.2"
+	}
+}
