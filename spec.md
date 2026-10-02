@@ -240,13 +240,10 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     settings: {
       ...(s.outputStyle ? { outputStyle: s.outputStyle } : {}),
       ...(s.disableConnectors ? { disableClaudeAiConnectors: true } : {}),
-      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny } : {}),
+      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny.map((serverName) => ({ serverName })) } : {}),
     },
     ...(s.skillsMode === 'plugin' ? { plugins: [{ type: 'local', path: skillsPluginPath }] } : {}),
-    extraArgs: {
-      ...(s.strictMcp ? { 'strict-mcp-config': null } : {}),
-      ...(chat.permissionMode === 'auto' ? { 'enable-auto-mode': null } : {}),  // confirm in M0
-    },
+    strictMcpConfig: s.strictMcp,
     permissionMode: chat.permissionMode,
     canUseTool: chat.onPermissionRequest,
     includePartialMessages: true,
@@ -264,7 +261,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 - **Process hygiene.** Every spawned process is tracked and killed on tab close, plugin unload and Obsidian quit.
 - **No telemetry.** Network traffic is only what Claude Code itself makes.
 - **Secrets.** Any values the plugin stores go in Obsidian's SecretStorage, not `data.json`.
-- **Bundling.** SDK marked external in esbuild; native binary resolved from the user's install, not bundled.
+- **Bundling.** SDK bundled into `main.js`, with build-time shims for the Node globals it expects (see [M0 findings](docs/m0-findings.md)); native binary resolved from the user's install, not bundled.
 - **Startup cost.** Plugin load must not spawn processes; the first one starts on the first message.
 - **Debugging.** A *Debug: log raw requests* toggle sets `OTEL_LOG_RAW_API_BODIES=file:<dir>`, so the exact system prompt, tools and reminders can be inspected.
 
@@ -283,15 +280,15 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 
 ## 9. Open questions (resolve in M0)
 
-1. Does `deniedMcpServers` in inline SDK `settings` take effect at the same precedence as a settings file, or only in managed settings?
-2. Is there a first-class SDK option for strict MCP config, or is `extraArgs` the only route?
-3. Does the SDK expand `@path` mentions in the prompt the same way the interactive CLI does? Determines whether CTX-8's "@" format attaches contents.
-4. Does `outputStyle` via inline `settings` pick up custom styles from `.claude/output-styles/` in the vault?
+1. ~~Does `deniedMcpServers` in inline SDK `settings` take effect at the same precedence as a settings file, or only in managed settings?~~ **Yes, it works inline (flag-settings tier), but entries must be `{ serverName }` objects; plain strings are silently ignored.** See [M0 findings](docs/m0-findings.md).
+2. ~~Is there a first-class SDK option for strict MCP config, or is `extraArgs` the only route?~~ **Yes: `strictMcpConfig: true`.**
+3. ~~Does the SDK expand `@path` mentions in the prompt the same way the interactive CLI does? Determines whether CTX-8's "@" format attaches contents.~~ **Yes, contents are attached.**
+4. ~~Does `outputStyle` via inline `settings` pick up custom styles from `.claude/output-styles/` in the vault?~~ **Yes, matched by frontmatter `name`; `available_output_styles` in the init response lists them.**
 5. Does the enterprise's managed configuration block any of MCP-2 to MCP-4? Check `/mcp` in the vault from the CLI first.
 6. Symlinked `.claude/skills`: does Obsidian Sync or another sync tool in use replace symlinks? If so, Mode B becomes the default.
-7. Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.
+7. ~~Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.~~ **`'vertical'` gives side-by-side.**
 8. How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.
-9. Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?
+9. ~~Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?~~ **Yes: core *New note in new pane*. Pick another default in M1.**
 10. Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.

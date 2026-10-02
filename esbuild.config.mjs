@@ -1,5 +1,5 @@
 import esbuild from "esbuild";
-import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +22,34 @@ const installToVault = {
 			await mkdir(pluginDir, { recursive: true });
 			await copyFile("manifest.json", join(pluginDir, "manifest.json"));
 			await copyFile("main.js", join(pluginDir, "main.js"));
+			await copyFile("styles.css", join(pluginDir, "styles.css"));
 			// Marker that tells the Hot Reload plugin to watch this folder.
 			await writeFile(join(pluginDir, ".hotreload"), "");
 			console.log(`Installed to ${pluginDir}`);
 		});
+	},
+};
+
+// The Agent SDK assumes Node globals, but Obsidian's renderer has DOM ones.
+// - AbortController is the DOM one, which Node's events.setMaxListeners
+//   rejects, so `events` is routed through a tolerant shim.
+// - setTimeout returns a number with no .unref(), which breaks the SDK's
+//   close() and leaves the claude process running, so Node's timers are
+//   imported explicitly.
+const sdkFiles = /[\\/]@anthropic-ai[\\/]claude-agent-sdk[\\/].*\.mjs$/;
+const sdkNodeGlobals = {
+	name: "sdk-node-globals",
+	setup(build) {
+		build.onResolve({ filter: /^(node:)?events$/ }, (args) =>
+			sdkFiles.test(args.importer) ? { path: join(import.meta.dirname, "src/shims/events.ts") } : undefined,
+		);
+		build.onLoad({ filter: sdkFiles }, async (args) => ({
+			// Appended because the file starts with a shebang; imports hoist anyway.
+			contents:
+				(await readFile(args.path, "utf8")) +
+				'\nimport { setTimeout, clearTimeout, setInterval, clearInterval } from "node:timers";\n',
+			loader: "js",
+		}));
 	},
 };
 
@@ -37,11 +61,15 @@ const context = await esbuild.context({
 		"electron",
 		"@codemirror/*",
 		"@lezer/*",
-		// Resolved from the user's install at runtime, never bundled (spec §7).
-		"@anthropic-ai/claude-agent-sdk",
 		...builtinModules,
 		...builtinModules.map((m) => `node:${m}`),
 	],
+	// The Agent SDK is ESM and calls createRequire(import.meta.url), which is
+	// empty in a CJS bundle. Point it at the bundle itself.
+	banner: {
+		js: `const __importMetaUrl = require("url").pathToFileURL(typeof __filename === "string" ? __filename : require("path").join(process.cwd(), "main.js")).href;`,
+	},
+	define: { "import.meta.url": "__importMetaUrl" },
 	format: "cjs",
 	target: "es2022",
 	platform: "node",
@@ -50,7 +78,7 @@ const context = await esbuild.context({
 	treeShaking: true,
 	minify: prod,
 	outfile: "main.js",
-	plugins: [installToVault],
+	plugins: [sdkNodeGlobals, installToVault],
 });
 
 if (prod) {

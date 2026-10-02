@@ -1,0 +1,52 @@
+.apollo-spike {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+}
+
+.apollo-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-transcript {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	user-select: text;
+}
+
+.apollo-msg.apollo-user {
+	align-self: flex-end;
+	max-width: 85%;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-m);
+	background: var(--background-modifier-hover);
+	white-space: pre-wrap;
+}
+
+.apollo-msg.apollo-assistant.is-streaming {
+	white-space: pre-wrap;
+}
+
+.apollo-msg.apollo-note {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-msg.apollo-error {
+	color: var(--text-error);
+}
+
+.apollo-input textarea {
+	width: 100%;
+	resize: vertical;
+}
+
+.apollo-buttons {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+}

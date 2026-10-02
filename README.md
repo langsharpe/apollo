@@ -25,6 +25,19 @@ obsidian vault=ApolloTest plugin:reload id=apollo
 obsidian vault=ApolloTest dev:errors
 ```
 
+## Usage (M0 spike)
+
+Run **Apollo: Open chat** (or click the ribbon icon) to open a chat in a split. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings. Tools that need approval are denied until M1 adds permission cards.
+
+The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md).
+
+## Probing Claude Code behaviour
+
+```sh
+node scripts/probe-m0.mts           # MCP and output-style checks, no model calls
+node scripts/probe-m0.mts --turns   # also runs three short Haiku turns
+```
+
 ## Install elsewhere
 
-Copy `manifest.json` and `main.js` into `<vault>/.obsidian/plugins/apollo/`, then enable **Apollo** under Settings → Community plugins.
+Copy `manifest.json`, `main.js` and `styles.css` into `<vault>/.obsidian/plugins/apollo/`, then enable **Apollo** under Settings → Community plugins.
