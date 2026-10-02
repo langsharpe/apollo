@@ -25,17 +25,20 @@ obsidian vault=ApolloTest plugin:reload id=apollo
 obsidian vault=ApolloTest dev:errors
 ```
 
-## Usage (M0 spike)
+## Usage
 
-Run **Apollo: Open chat** (or click the ribbon icon) to open a chat in a split. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings. Tools that need approval are denied until M1 adds permission cards.
+Run **Apollo: Open chat** (or click the ribbon icon) to open a chat in a split. **Apollo: New chat in current pane** (`Mod+Alt+N`, or `/new` in the input) starts a fresh session in the focused chat. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings.
 
-The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md).
+Each chat keeps one Claude Code process running between turns. Pick the permission mode (Ask, Accept edits, Plan, Auto) in the chat header; the default for new chats is a setting. Tool calls that need approval show an inline card. Stop (or `Esc`) interrupts the turn, and messages sent while Claude is working queue until the turn ends.
+
+The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md) and [docs/m1-findings.md](docs/m1-findings.md).
 
 ## Probing Claude Code behaviour
 
 ```sh
 node scripts/probe-m0.mts           # MCP and output-style checks, no model calls
 node scripts/probe-m0.mts --turns   # also runs three short Haiku turns
+node scripts/probe-m1.mts           # streaming input, interrupt, permission modes (Haiku and Sonnet turns)
 ```
 
 ## Install elsewhere

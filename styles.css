@@ -1,12 +1,48 @@
-.apollo-spike {
+.apollo-chat {
 	display: flex;
 	flex-direction: column;
+	gap: var(--size-4-2);
+}
+
+.apollo-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
 	gap: var(--size-4-2);
 }
 
 .apollo-status {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-status::before {
+	content: "";
+	display: inline-block;
+	width: 8px;
+	height: 8px;
+	margin-right: var(--size-4-2);
+	border-radius: 50%;
+	background: var(--text-faint);
+}
+
+.apollo-chat[data-status="running"] .apollo-status::before {
+	background: var(--color-green);
+}
+
+.apollo-chat[data-status="awaiting"] .apollo-status::before {
+	background: var(--color-orange);
+}
+
+.apollo-chat[data-status="error"] .apollo-status::before {
+	background: var(--color-red);
+}
+
+.apollo-mode {
+	flex-shrink: 0;
 }
 
 .apollo-transcript {
@@ -18,6 +54,11 @@
 	user-select: text;
 }
 
+.apollo-empty {
+	margin: auto;
+	color: var(--text-faint);
+}
+
 .apollo-msg.apollo-user {
 	align-self: flex-end;
 	max-width: 85%;
@@ -25,6 +66,11 @@
 	border-radius: var(--radius-m);
 	background: var(--background-modifier-hover);
 	white-space: pre-wrap;
+}
+
+.apollo-msg.apollo-user.is-queued {
+	opacity: 0.6;
+	border: 1px dashed var(--background-modifier-border);
 }
 
 .apollo-msg.apollo-assistant.is-streaming {
@@ -40,6 +86,157 @@
 	color: var(--text-error);
 }
 
+/* Tool calls: one compact row each. */
+.apollo-tool {
+	display: flex;
+	gap: var(--size-4-2);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	min-width: 0;
+}
+
+.apollo-tool::before {
+	content: "○";
+	color: var(--text-faint);
+}
+
+.apollo-tool.is-done::before {
+	content: "●";
+	color: var(--color-green);
+}
+
+.apollo-tool.is-error::before {
+	content: "●";
+	color: var(--color-red);
+}
+
+.apollo-tool-name {
+	font-weight: var(--font-semibold);
+	flex-shrink: 0;
+}
+
+.apollo-tool-summary {
+	font-family: var(--font-monospace);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Permission cards. */
+.apollo-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	padding: var(--size-4-3);
+	border: 1px solid var(--color-orange);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+}
+
+.apollo-card.is-answered {
+	padding: var(--size-4-1) var(--size-4-3);
+	border-color: var(--background-modifier-border);
+	background: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-card.is-denied .apollo-card-summary {
+	color: var(--text-error);
+}
+
+.apollo-card-title {
+	font-weight: var(--font-semibold);
+}
+
+.apollo-card-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-card-reason {
+	color: var(--color-orange);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-card-body {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	min-width: 0;
+}
+
+.apollo-card-markdown {
+	max-height: 50vh;
+	overflow-y: auto;
+	padding: 0 var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+}
+
+.apollo-card-path {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-card-code,
+.apollo-diff {
+	margin: 0;
+	max-height: 40vh;
+	overflow: auto;
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	white-space: pre-wrap;
+	word-break: break-all;
+}
+
+.apollo-diff-line.is-add {
+	background: rgba(var(--color-green-rgb), 0.15);
+}
+
+.apollo-diff-line.is-del {
+	background: rgba(var(--color-red-rgb), 0.15);
+}
+
+.apollo-diff-gap {
+	color: var(--text-faint);
+}
+
+.apollo-card-feedback {
+	width: 100%;
+	resize: vertical;
+}
+
+.apollo-card-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: var(--size-4-2);
+}
+
+.apollo-question {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+}
+
+.apollo-question-header {
+	align-self: flex-start;
+	padding: 0 var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: var(--background-modifier-hover);
+	font-size: var(--font-ui-smaller);
+}
+
+.apollo-question-option {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+}
+
+/* Input. */
 .apollo-input textarea {
 	width: 100%;
 	resize: vertical;

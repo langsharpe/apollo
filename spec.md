@@ -57,7 +57,7 @@ Key decisions:
 | TAB-1 | Each chat is an Obsidian leaf hosting a `ChatView`. Multiple chats can be open at once. |
 | TAB-2 | Setting: **Open new chats in** `tab` / `split right` / `split down` / `right sidebar`. Implemented with `workspace.getLeaf('tab')` or `getLeaf('split', direction)`. |
 | TAB-3 | Commands: *New chat*, *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*. All bindable to hotkeys. |
-| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** (proposed `Mod+Shift+N`, confirm no conflict in M0) via `addCommand({ hotkeys })`. If focus is in a note rather than a chat, opens a new chat using the *Open new chats in* setting. Also available as `/new` typed in the input. |
+| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** `Mod+Alt+N` via `addCommand({ hotkeys })` (`Mod+Shift+N` is core *New note in new pane*). If focus is in a note rather than a chat, opens a new chat using the *Open new chats in* setting. Also available as `/new` typed in the input. |
 | TAB-4 | Tab title = session title (first prompt summary, or user rename). Show a status dot: idle, running, awaiting permission, error. |
 | TAB-5 | Tab state (session ID, draft text, scroll position) persists through `getState`/`setState`, so Obsidian restores open chats on restart. |
 | TAB-6 | Idle tabs release their Claude Code process after a configurable timeout (default 10 min) and transparently resume on the next message. Note: releasing the process likely clears Claude Code's in-memory record of seen files, so native file-change notes stop for that session until files are read again. CHG-2 covers this once change awareness ships. |
@@ -211,7 +211,7 @@ Known trade-off: system reminders don't appear in the SDK message stream, so the
 | Skills folder / mode | Vault | Empty / Linked |
 | Reference insertion format | Vault | Plain path |
 | Default permission mode | Vault | Ask (options: Ask, Accept edits, Plan, Auto) |
-| New chat in current pane hotkey | Device | `Mod+Shift+N` |
+| New chat in current pane hotkey | Device | `Mod+Alt+N` |
 | Idle process timeout | Device | 10 min |
 | Max running processes | Device | 4 |
 | Default model / effort | Vault | Claude Code default |
@@ -287,8 +287,8 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 5. Does the enterprise's managed configuration block any of MCP-2 to MCP-4? Check `/mcp` in the vault from the CLI first.
 6. Symlinked `.claude/skills`: does Obsidian Sync or another sync tool in use replace symlinks? If so, Mode B becomes the default.
 7. ~~Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.~~ **`'vertical'` gives side-by-side.**
-8. How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.
-9. ~~Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?~~ **Yes: core *New note in new pane*. Pick another default in M1.**
+8. ~~How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.~~ **`permissionMode: 'auto'` alone is enough, on a model that supports it. Haiku doesn't, and silently falls back to `default`.** See [M1 findings](docs/m1-findings.md).
+9. ~~Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?~~ **Yes: core *New note in new pane*. M1 uses `Mod+Alt+N`, which is free.**
 10. Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.
