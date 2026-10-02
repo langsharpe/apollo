@@ -1,5 +1,5 @@
 import type { CanUseTool, PermissionMode, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ItemView, MarkdownRenderer, Notice, type WorkspaceLeaf } from "obsidian";
+import { ItemView, MarkdownRenderer, Notice, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
 import { resolveShellEnv } from "./cli";
 import { ChatSession } from "./chat-session";
 import type ApolloPlugin from "./main";
@@ -24,7 +24,7 @@ export class ChatView extends ItemView {
 	private pendingCards = 0;
 	private stopping = false;
 
-	private statusEl!: HTMLElement;
+	private infoEl!: HTMLElement;
 	private modeEl!: HTMLSelectElement;
 	private transcriptEl!: HTMLElement;
 	private inputEl!: HTMLTextAreaElement;
@@ -61,17 +61,24 @@ export class ChatView extends ItemView {
 		root.empty();
 		root.addClass("apollo-chat");
 
-		const header = root.createDiv({ cls: "apollo-header" });
-		this.statusEl = header.createDiv({ cls: "apollo-status" });
-		this.modeEl = header.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
-		this.renderModeOptions();
-		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
-
 		this.transcriptEl = root.createDiv({ cls: "apollo-transcript" });
 
 		const form = root.createDiv({ cls: "apollo-input" });
 		this.inputEl = form.createEl("textarea", { attr: { placeholder: "Ask Claude…  (Enter to send, Esc to stop)", rows: "3" } });
-		const buttons = form.createDiv({ cls: "apollo-buttons" });
+		const toolbar = form.createDiv({ cls: "apollo-toolbar" });
+		// Status dot plus model and session details on hover.
+		this.infoEl = toolbar.createDiv({ cls: "apollo-info clickable-icon" });
+		setIcon(this.infoEl, "info");
+		// The tooltip shows a short ID, but `claude --resume` needs the full one.
+		this.registerDomEvent(this.infoEl, "click", () => {
+			const id = this.session.sessionId;
+			if (!id) return;
+			void navigator.clipboard.writeText(id).then(() => new Notice("Session ID copied."));
+		});
+		this.modeEl = toolbar.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
+		this.renderModeOptions();
+		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
+		const buttons = toolbar.createDiv({ cls: "apollo-buttons" });
 		this.stopBtn = buttons.createEl("button", { text: "Stop" });
 		const sendBtn = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
 
@@ -90,7 +97,7 @@ export class ChatView extends ItemView {
 
 		this.newChat();
 		const { claudePath } = await resolveShellEnv();
-		if (!this.plugin.settings.cliPath && !claudePath) this.statusEl.setText("Claude CLI not found. Set its path in settings.");
+		if (!this.plugin.settings.cliPath && !claudePath) this.note("Claude CLI not found. Set its path in settings.", "apollo-error");
 	}
 
 	override async onClose(): Promise<void> {
@@ -123,7 +130,7 @@ export class ChatView extends ItemView {
 		this.toolRows.clear();
 		this.transcriptEl.empty();
 		this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
-		this.statusEl.setText("New chat");
+		this.setInfo("New chat. No session yet.");
 		this.setStatus("idle");
 		this.inputEl.focus();
 	}
@@ -242,7 +249,7 @@ export class ChatView extends ItemView {
 		switch (msg.type) {
 			case "system":
 				if (msg.subtype === "init") {
-					this.statusEl.setText(`${msg.model} · session ${msg.session_id.slice(0, 8)}`);
+					this.setInfo(`Model: ${msg.model}\nSession: ${msg.session_id.slice(0, 8)}\nClick to copy the full session ID.`);
 					this.syncMode(msg.permissionMode);
 				} else if (msg.subtype === "status" && msg.permissionMode) {
 					this.syncMode(msg.permissionMode);
@@ -273,16 +280,16 @@ export class ChatView extends ItemView {
 				}
 				break;
 			case "result":
-				this.onTurnEnd(msg.subtype, msg.duration_ms, msg.total_cost_usd);
+				this.onTurnEnd(msg.subtype, msg.duration_ms);
 				break;
 		}
 	}
 
-	private onTurnEnd(subtype: string, durationMs: number, costUsd: number): void {
+	private onTurnEnd(subtype: string, durationMs: number): void {
 		this.finishBlock();
 		const secs = (durationMs / 1000).toFixed(1);
 		if (this.stopping) this.note("Stopped.");
-		else this.note(`${subtype === "success" ? "Done" : `Ended (${subtype})`} in ${secs}s · $${costUsd.toFixed(4)}`);
+		else this.note(`${subtype === "success" ? "Done" : `Ended (${subtype})`} in ${secs}s`);
 		this.stopping = false;
 
 		// Messages typed during the turn go out together as the next one.
@@ -333,6 +340,10 @@ export class ChatView extends ItemView {
 	private note(text: string, cls = "apollo-note"): void {
 		this.transcriptEl.createDiv({ cls: `apollo-msg ${cls}`, text });
 		this.scrollToEnd();
+	}
+
+	private setInfo(text: string): void {
+		setTooltip(this.infoEl, text, { placement: "top" });
 	}
 
 	private setStatus(status: Status): void {

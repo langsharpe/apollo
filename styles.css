@@ -4,47 +4,6 @@
 	gap: var(--size-4-2);
 }
 
-.apollo-header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: var(--size-4-2);
-}
-
-.apollo-status {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.apollo-status::before {
-	content: "";
-	display: inline-block;
-	width: 8px;
-	height: 8px;
-	margin-right: var(--size-4-2);
-	border-radius: 50%;
-	background: var(--text-faint);
-}
-
-.apollo-chat[data-status="running"] .apollo-status::before {
-	background: var(--color-green);
-}
-
-.apollo-chat[data-status="awaiting"] .apollo-status::before {
-	background: var(--color-orange);
-}
-
-.apollo-chat[data-status="error"] .apollo-status::before {
-	background: var(--color-red);
-}
-
-.apollo-mode {
-	flex-shrink: 0;
-}
-
 .apollo-transcript {
 	flex: 1;
 	overflow-y: auto;
@@ -242,8 +201,43 @@
 	resize: vertical;
 }
 
+.apollo-toolbar {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+/* Info icon with a status dot in its corner. */
+.apollo-info {
+	position: relative;
+	color: var(--text-muted);
+}
+
+.apollo-info::after {
+	content: "";
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--text-faint);
+}
+
+.apollo-chat[data-status="running"] .apollo-info::after {
+	background: var(--color-green);
+}
+
+.apollo-chat[data-status="awaiting"] .apollo-info::after {
+	background: var(--color-orange);
+}
+
+.apollo-chat[data-status="error"] .apollo-info::after {
+	background: var(--color-red);
+}
+
 .apollo-buttons {
 	display: flex;
-	justify-content: flex-end;
 	gap: var(--size-4-2);
+	margin-left: auto;
 }
