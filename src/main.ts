@@ -1,14 +1,20 @@
-import { FileSystemAdapter, Notice, Plugin, WorkspaceTabs, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, WorkspaceTabs, debounce, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
+import { CommandCatalogue, type CatalogueCache } from "./catalogue";
 import { CHAT_VIEW_TYPE, ChatView, userPrompt, type ChatViewState } from "./chat-view";
 import type { ChatSession } from "./chat-session";
 import { confirmAction, promptText } from "./modals";
+import { formatSelection } from "./references";
 import { SESSION_LIST_VIEW_TYPE, SessionListView } from "./session-list-view";
 import { SessionStore, type SessionMeta } from "./sessions";
 import { ApolloSettingTab, ApolloSettings, DEFAULT_SETTINGS, type ChatPlacement } from "./settings";
 
 interface PluginData extends Partial<ApolloSettings> {
 	sessionMeta?: Partial<SessionMeta>;
+	catalogue?: CatalogueCache;
 }
+
+/** Where "Add to chat" puts references. */
+type ChatTarget = "active" | "new";
 
 /** A message to fork from: the fork keeps the conversation up to it. */
 export interface ForkPoint {
@@ -19,18 +25,33 @@ export interface ForkPoint {
 export default class ApolloPlugin extends Plugin {
 	override settings: ApolloSettings = { ...DEFAULT_SETTINGS };
 	store!: SessionStore;
+	catalogue!: CommandCatalogue;
 
 	/** Sessions with a running Claude Code process, so every process can be killed on unload. */
 	readonly sessions = new Set<ChatSession>();
 
+	/** The chat that last had focus, where "Add to chat" goes. */
+	private lastChat: WorkspaceLeaf | null = null;
+
+	private readonly requestSave = debounce(() => void this.save(), 1000, true);
+
 	override async onload(): Promise<void> {
-		const { sessionMeta, ...settings }: PluginData = (await this.loadData()) ?? {};
+		const { sessionMeta, catalogue, ...settings }: PluginData = (await this.loadData()) ?? {};
 		this.settings = { ...DEFAULT_SETTINGS, ...settings };
 		this.store = new SessionStore(
 			() => this.vaultPath(),
 			{ pinned: sessionMeta?.pinned ?? [], forkedFrom: sessionMeta?.forkedFrom ?? {} },
 			() => this.save(),
 		);
+		// Served from the cache at once; re-scanned once the layout is ready, off the startup path (SLS-3).
+		this.catalogue = new CommandCatalogue(() => this.vaultPath(), catalogue ?? {}, () => this.requestSave());
+		this.app.workspace.onLayoutReady(() => void this.catalogue.scan());
+		// ~/.claude isn't watched; check it when Obsidian regains focus (SLS-4).
+		this.registerDomEvent(window, "focus", () => this.catalogue.scanIfStale());
+		this.register(() => {
+			this.catalogue.close();
+			this.requestSave.run();
+		});
 		this.addSettingTab(new ApolloSettingTab(this.app, this));
 
 		this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
@@ -79,6 +100,50 @@ export default class ApolloPlugin extends Plugin {
 			name: "Open chat list",
 			callback: () => void this.openChatList(),
 		});
+		// CTX-4. Mod+Shift+L is free in a default Obsidian (M0 findings).
+		this.addCommand({
+			id: "add-current-note",
+			name: "Add current note to chat",
+			hotkeys: [{ modifiers: ["Mod", "Shift"], key: "L" }],
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file) return false;
+				if (!checking) void this.addToChat([file], "active");
+				return true;
+			},
+		});
+		// CTX-5.
+		this.addCommand({
+			id: "add-selection",
+			name: "Add selection to chat",
+			editorCheckCallback: (checking, editor, ctx) => {
+				if (!ctx.file || !editor.somethingSelected()) return false;
+				if (!checking) void this.addSelection(editor, ctx.file);
+				return true;
+			},
+		});
+		// CTX-3.
+		this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => this.addChatMenuItems(menu, [file])));
+		this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => this.addChatMenuItems(menu, files)));
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor, info) => {
+				if (!info.file || !editor.somethingSelected()) return;
+				// The editor menu's "action" group comes after the clipboard items and is unused for selections.
+				menu.addItem((item) =>
+					item
+						.setSection("action")
+						.setTitle("Add selection to chat")
+						.setIcon("bot")
+						.onClick(() => void this.addSelection(editor, info.file!)),
+				);
+			}),
+		);
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
+			}),
+		);
+
 		this.addRibbonIcon("bot", "New Apollo chat", () => void this.openChat());
 		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
 
@@ -90,7 +155,7 @@ export default class ApolloPlugin extends Plugin {
 	}
 
 	async save(): Promise<void> {
-		const data: PluginData = { ...this.settings, sessionMeta: this.store.meta };
+		const data: PluginData = { ...this.settings, sessionMeta: this.store.meta, catalogue: this.catalogue.toCache() };
 		await this.saveData(data);
 	}
 
@@ -104,11 +169,73 @@ export default class ApolloPlugin extends Plugin {
 	 * Opens a chat where the "Open new chats in" setting says. With a session
 	 * ID, focuses the tab that already has it, or resumes it in a new one.
 	 */
-	async openChat(state: Partial<ChatViewState> = {}, placement: ChatPlacement = this.settings.openChatsIn): Promise<void> {
+	async openChat(state: Partial<ChatViewState> = {}, placement: ChatPlacement = this.settings.openChatsIn): Promise<WorkspaceLeaf> {
 		const existing = state.sessionId ? this.chatLeaves().find((leaf) => leafSessionId(leaf) === state.sessionId) : undefined;
 		const leaf = existing ?? this.newLeaf(placement);
 		if (!existing) await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: { ...state } });
 		await this.focusLeaf(leaf);
+		return leaf;
+	}
+
+	/** Adds file and folder references to a chat's input (CTX-3, CTX-4). */
+	async addToChat(files: TAbstractFile[], target: ChatTarget): Promise<void> {
+		await this.withChat(target, (view) => view.insertReferences(files));
+	}
+
+	/** Adds `path:L10-L24` and the selected text as a quote (CTX-5). */
+	private async addSelection(editor: Editor, file: TFile): Promise<void> {
+		const from = editor.getCursor("from");
+		const to = editor.getCursor("to");
+		// A selection ending at the start of a line doesn't include that line.
+		const toLine = to.ch === 0 && to.line > from.line ? to.line - 1 : to.line;
+		const block = formatSelection(file, from.line + 1, toLine + 1, editor.getSelection());
+		await this.withChat("active", (view) => view.insertBlock(block));
+	}
+
+	/**
+	 * Focuses the chat that last had focus (or any open chat), or opens a new
+	 * one, then hands it over.
+	 */
+	private async withChat(target: ChatTarget, use: (view: ChatView) => void): Promise<void> {
+		const leaves = this.chatLeaves();
+		// Before any chat has had focus (e.g. after a restart), prefer one that's on screen.
+		const fallback = leaves.find((l) => !l.isDeferred) ?? leaves[0] ?? null;
+		let leaf = target === "active" ? (this.lastChat && leaves.includes(this.lastChat) ? this.lastChat : fallback) : null;
+		if (leaf) await this.focusLeaf(leaf);
+		else leaf = await this.openChat();
+		await leaf.loadIfDeferred();
+		if (leaf.view instanceof ChatView) use(leaf.view);
+	}
+
+	/**
+	 * "Add to chat" gets a group of its own in file menus. Each menu orders
+	 * its sections (the file explorer: title, open, action-primary, action,
+	 * info, view, system, danger; a note's More options: close, pane, open,
+	 * action, …) and puts sections it doesn't list after Delete. Core fills
+	 * different ones in each: action-primary is free on a file but holds New
+	 * note on a folder, and info is shared with Copy path. So take the first
+	 * preferred section the menu lists and hasn't used yet.
+	 */
+	private addChatMenuItems(menu: Menu, files: TAbstractFile[]): void {
+		if (!files.length) return;
+		const what = files.length > 1 ? `${files.length} items` : "";
+		const { items, sections } = menu as Menu & MenuInternals;
+		const used = new Set(items?.map((i) => i.section));
+		const section = sections ? (["action-primary", "open", "close"].find((s) => sections.includes(s) && !used.has(s)) ?? "action") : "action";
+		menu.addItem((item) =>
+			item
+				.setSection(section)
+				.setTitle(what ? `Add ${what} to chat` : "Add to chat")
+				.setIcon("bot")
+				.onClick(() => void this.addToChat(files, "active")),
+		);
+		menu.addItem((item) =>
+			item
+				.setSection(section)
+				.setTitle(what ? `Add ${what} to new chat` : "Add to new chat")
+				.setIcon("message-square-plus")
+				.onClick(() => void this.addToChat(files, "new")),
+		);
 	}
 
 	/** Session IDs open in a chat, including tabs Obsidian hasn't loaded yet. */
@@ -225,6 +352,13 @@ export default class ApolloPlugin extends Plugin {
 	private closeAll(): void {
 		for (const session of [...this.sessions]) session.close();
 	}
+}
+
+/** Obsidian internals the public API doesn't expose. May be missing. */
+interface MenuInternals {
+	items?: { section?: string }[];
+	/** Section order, from `addSections`. */
+	sections?: string[];
 }
 
 /** The session a chat leaf shows. Works for deferred tabs, whose saved state stands in for the view. */

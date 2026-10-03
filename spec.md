@@ -82,7 +82,7 @@ This replaces copying paths into chat by hand.
 |---|---|
 | CTX-1 | **@ picker.** Typing `@` in the input opens a fuzzy picker over vault files *and folders* (built on Obsidian's suggest APIs and `vault.getAllLoadedFiles()`). |
 | CTX-2 | **Drag and drop.** Dragging a file or folder from the file explorer, a tab header, or a search result into the input inserts a reference chip. Multiple items supported. |
-| CTX-3 | **Context menu.** Right-click a file or folder (`file-menu` event) → *Add to chat*. Submenu: *active chat* / *new chat*. Also available on multi-selection (`files-menu`). |
+| CTX-3 | **Context menu.** Right-click a file or folder (`file-menu` event) → *Add to chat* / *Add to new chat* (two items, since submenus aren't public API). Also available on multi-selection (`files-menu`). |
 | CTX-4 | **Active note command.** *Add current note to chat* (suggested hotkey `Cmd+Shift+L`). |
 | CTX-5 | **Selection command.** *Add selection to chat* inserts `path:L10-L24` plus the selected text as a quoted block. |
 | CTX-6 | **Paste normalisation.** Pasting an absolute path inside the vault converts it to a vault-relative reference chip. Paths outside the vault stay as text, with a warning icon. |
@@ -245,6 +245,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     ...(s.skillsMode === 'plugin' ? { plugins: [{ type: 'local', path: skillsPluginPath }] } : {}),
     strictMcpConfig: s.strictMcp,
     permissionMode: chat.permissionMode,
+    ...(chat.model ? { model: chat.model } : {}),  // from /model (M3)
     canUseTool: chat.onPermissionRequest,
     includePartialMessages: true,
     abortController: chat.abort,
@@ -291,8 +292,8 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 10. ~~Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.~~ **Any entry UUID works, for `resumeSessionAt` and `forkSession({ upToMessageId })` alike. Forking at a text block mid-turn is clean; forking at a tool_use whose result is cut off leaves Claude Code treating the call as failed, so Apollo only offers forks on text.** See [M2 findings](docs/m2-findings.md).
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.
-13. Slash commands via the SDK: confirm that sending `/skill-name args` as the prompt text runs the skill exactly as in the CLI, and whether `supportedCommands()` needs a live query or can be called cheaply at session start.
-14. Skill shadowing: when the same skill name exists at user and project level, which wins? The catalogue (SLS-5) should mirror Claude Code's precedence.
+13. ~~Slash commands via the SDK: confirm that sending `/skill-name args` as the prompt text runs the skill exactly as in the CLI, and whether `supportedCommands()` needs a live query or can be called cheaply at session start.~~ **Yes, skills, commands and MCP prompts run when sent as text. `supportedCommands()` needs a `query()` but no turn: it resolves with the init handshake, so it's free on a session that is starting anyway.** See [M3 findings](docs/m3-findings.md).
+14. ~~Skill shadowing: when the same skill name exists at user and project level, which wins? The catalogue (SLS-5) should mirror Claude Code's precedence.~~ **The user skill wins.** See [M3 findings](docs/m3-findings.md).
 
 ## 10. References
 

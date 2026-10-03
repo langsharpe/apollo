@@ -35,7 +35,11 @@ Pick the permission mode (Ask, Accept edits, Plan, Auto) in the chat toolbar; th
 
 **Claude chats** (the messages ribbon icon, or *Open chat list*) lists every Claude Code session for the vault, including ones started in the terminal. Click to open or resume; right-click to fork, rename, pin or delete. Sessions are Claude Code's own transcripts, so `claude --resume` in the vault sees the same list. Hover a message and click the branch icon to fork from there. Forking from one of your messages puts it back in the input to edit and resend.
 
-The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md), [docs/m1-findings.md](docs/m1-findings.md) and [docs/m2-findings.md](docs/m2-findings.md).
+Type `@` in the input to pick a file or folder, or drag one in from the file explorer, a tab or Finder. You can also right-click it and choose *Add to chat*, run *Add current note to chat* (`Mod+Shift+L`), or select text and run *Add selection to chat*. The toolbar's files button lists open notes. Pasting an absolute path inside the vault turns it into a vault-relative reference. References go in as plain paths by default; set **Reference format** to *@-mention* to attach file contents instead. Paths in Claude's replies and tool calls are clickable.
+
+Type `/` to open the slash menu: Apollo's own commands (`/new`, `/clear`, `/fork`, `/model`, `/mode`), skills, custom commands, MCP prompts and Claude Code's built-ins. It's served from a catalogue Apollo builds by scanning `.claude/skills`, `.claude/commands`, `~/.claude` and enabled plugins, then reconciles with what Claude Code reports when a chat starts.
+
+The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md), [docs/m1-findings.md](docs/m1-findings.md), [docs/m2-findings.md](docs/m2-findings.md) and [docs/m3-findings.md](docs/m3-findings.md).
 
 ## Probing Claude Code behaviour
 
@@ -44,6 +48,8 @@ node scripts/probe-m0.mts           # MCP and output-style checks, no model call
 node scripts/probe-m0.mts --turns   # also runs three short Haiku turns
 node scripts/probe-m1.mts           # streaming input, interrupt, permission modes (Haiku and Sonnet turns)
 node scripts/probe-m2.mts           # message UUIDs, forks, rename and delete (Haiku turns, sessions cleaned up)
+node scripts/probe-m3.mts           # command lists and skill precedence, no model calls
+node scripts/probe-m3.mts --turns   # also slash commands, skills and quoted @-mentions (Haiku turns)
 ```
 
 ## Install elsewhere

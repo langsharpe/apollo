@@ -1,9 +1,12 @@
 import type { CanUseTool, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ItemView, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { resolveShellEnv } from "./cli";
+import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";
 import type ApolloPlugin from "./main";
+import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
+import { createReferenceEl, linkifyPaths, openReference, renderWithReferences, resolve, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { PERMISSION_MODES } from "./settings";
 
@@ -19,6 +22,8 @@ export interface ChatViewState {
 	/** Transcript scroll position, or null when scrolled to the end. */
 	scroll: number | null;
 	mode: PermissionMode;
+	/** Model chosen with /model, or null for Claude Code's default. */
+	model: string | null;
 }
 
 /** Obsidian internals the public API doesn't expose. All may be missing. */
@@ -48,6 +53,7 @@ export class ChatView extends ItemView {
 	private session!: ChatSession;
 	private mode: PermissionMode;
 	private title = NEW_CHAT_TITLE;
+	/** The model Claude Code reports using. */
 	private model: string | null = null;
 	private queued: { text: string; el: HTMLElement }[] = [];
 	private pendingCards = 0;
@@ -56,7 +62,7 @@ export class ChatView extends ItemView {
 	private infoEl!: HTMLElement;
 	private modeEl!: HTMLSelectElement;
 	private transcriptEl!: HTMLElement;
-	private inputEl!: HTMLTextAreaElement;
+	private input!: ChatInput;
 	private stopBtn!: HTMLButtonElement;
 
 	// Streaming state for the current text block.
@@ -99,8 +105,19 @@ export class ChatView extends ItemView {
 		this.transcriptEl = root.createDiv({ cls: "apollo-transcript" });
 		this.registerDomEvent(this.transcriptEl, "scroll", () => this.app.workspace.requestSaveLayout());
 
+		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
+		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
+
 		const form = root.createDiv({ cls: "apollo-input" });
-		this.inputEl = form.createEl("textarea", { attr: { placeholder: "Ask Claude…  (Enter to send, Esc to stop)", rows: "3" } });
+		this.input = new ChatInput(form, this.plugin, this, {
+			submit: () => this.submit(),
+			escape: () => {
+				if (!this.session.busy) return false;
+				this.stop();
+				return true;
+			},
+			changed: () => this.app.workspace.requestSaveLayout(),
+		});
 		const toolbar = form.createDiv({ cls: "apollo-toolbar" });
 		// Status dot plus model and session details on hover.
 		this.infoEl = toolbar.createDiv({ cls: "apollo-info clickable-icon" });
@@ -110,23 +127,16 @@ export class ChatView extends ItemView {
 		this.modeEl = toolbar.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
 		this.renderModeOptions();
 		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
+		// CTX-7.
+		const openNotes = toolbar.createDiv({ cls: "apollo-open-notes clickable-icon", attr: { "aria-label": "Add an open note" } });
+		setIcon(openNotes, "files");
+		this.registerDomEvent(openNotes, "click", (evt) => this.input.showOpenNotes(evt));
 		const buttons = toolbar.createDiv({ cls: "apollo-buttons" });
 		this.stopBtn = buttons.createEl("button", { text: "Stop" });
 		const sendBtn = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
 
 		this.registerDomEvent(sendBtn, "click", () => this.submit());
 		this.registerDomEvent(this.stopBtn, "click", () => this.stop());
-		this.registerDomEvent(this.inputEl, "input", () => this.app.workspace.requestSaveLayout());
-		this.registerDomEvent(this.inputEl, "keydown", (evt) => {
-			if (evt.isComposing) return;
-			if (evt.key === "Enter" && !evt.shiftKey) {
-				evt.preventDefault();
-				this.submit();
-			} else if (evt.key === "Escape" && this.session.busy) {
-				evt.preventDefault();
-				this.stop();
-			}
-		});
 		// Renames, from here or the chat list, and Claude Code's own titles.
 		this.registerEvent(this.plugin.store.onChanged(() => void this.refreshTitle()));
 
@@ -143,9 +153,10 @@ export class ChatView extends ItemView {
 		const state: ChatViewState = {
 			sessionId: this.sessionId,
 			title: this.title,
-			draft: this.inputEl?.value ?? "",
+			draft: this.input?.value ?? "",
 			scroll: this.transcriptEl && !this.isNearEnd() ? this.transcriptEl.scrollTop : null,
 			mode: this.mode,
+			model: this.session?.model ?? null,
 		};
 		return { ...super.getState(), ...state };
 	}
@@ -158,7 +169,8 @@ export class ChatView extends ItemView {
 			this.session.permissionMode = s.mode;
 			this.renderModeOptions();
 		}
-		if (s.draft && !this.inputEl.value) this.inputEl.value = s.draft;
+		if (s.model !== undefined && s.model !== this.session.model) this.session.model = s.model;
+		if (s.draft && !this.input.value) this.input.value = s.draft;
 		await super.setState(state, result);
 	}
 
@@ -172,13 +184,23 @@ export class ChatView extends ItemView {
 	}
 
 	focusInput(): void {
-		this.inputEl.focus();
+		this.input.focus();
 	}
 
 	/** Starts a fresh session in this pane. The old one stays on disk for resume. */
 	newChat(): void {
 		this.reset(null);
-		this.inputEl.focus();
+		this.input.focus();
+	}
+
+	/** Adds file and folder references at the caret (CTX-2 to CTX-4). */
+	insertReferences(files: TAbstractFile[]): void {
+		this.input.insertReferences(files);
+	}
+
+	/** Adds a block of text, such as a quoted selection, on its own lines (CTX-5). */
+	insertBlock(text: string): void {
+		this.input.insertBlock(text);
 	}
 
 	/** Shows a saved session's history; the next message resumes it (HIST-5). */
@@ -244,16 +266,14 @@ export class ChatView extends ItemView {
 	}
 
 	private submit(): void {
-		const text = this.inputEl.value.trim();
+		const text = this.input.value.trim();
 		if (!text) return;
-		this.inputEl.value = "";
+		if (this.runApolloCommand(text)) return;
+		this.input.value = "";
 		this.app.workspace.requestSaveLayout();
-		if (text === "/new") {
-			this.newChat();
-			return;
-		}
 		this.transcriptEl.querySelector(".apollo-empty")?.remove();
-		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-user", text });
+		const el = this.userBubble(text);
+		this.skillRowForCommand(text);
 		this.scrollToEnd(true);
 		if (this.session.busy) {
 			el.addClass("is-queued");
@@ -288,7 +308,7 @@ export class ChatView extends ItemView {
 	private returnQueuedToInput(): void {
 		if (!this.queued.length) return;
 		for (const q of this.queued) q.el.remove();
-		this.inputEl.value = [...this.queued.map((q) => q.text), this.inputEl.value].filter(Boolean).join("\n\n");
+		this.input.value = [...this.queued.map((q) => q.text), this.input.value].filter(Boolean).join("\n\n");
 		this.queued = [];
 	}
 
@@ -417,6 +437,8 @@ export class ChatView extends ItemView {
 		this.stopping = false;
 		// The chat list's "last updated", and Claude Code's generated title.
 		this.plugin.store.changed();
+		// The turn may have added skills or commands; the scan is cheap when nothing changed.
+		this.plugin.catalogue.requestScan();
 
 		// Messages typed during the turn go out together as the next one.
 		if (this.queued.length) {
@@ -447,12 +469,15 @@ export class ChatView extends ItemView {
 				}
 				const prompt = displayPrompt(texts.join("\n\n"));
 				if (prompt === INTERRUPTED) this.note("Stopped.");
-				else if (prompt) this.addForkAction(this.transcriptEl.createDiv({ cls: "apollo-msg apollo-user", text: prompt }), msg.uuid, "user");
+				else if (prompt) {
+					this.addForkAction(this.userBubble(prompt), msg.uuid, "user");
+					this.skillRowForCommand(prompt);
+				}
 			} else if (msg.type === "assistant") {
 				for (const block of blocks) {
 					if (block.type === "text" && block.text) {
 						const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
-						renders.push(MarkdownRenderer.render(this.app, block.text, el.createDiv(), "", this));
+						renders.push(this.renderMarkdown(block.text, el.createDiv()));
 						this.addForkAction(el, msg.uuid, "assistant");
 					} else if (block.type === "tool_use" && block.id && block.name) {
 						this.toolRow(block.id, block.name, block.input ?? {});
@@ -483,12 +508,170 @@ export class ChatView extends ItemView {
 
 	private toolRow(id: string, name: string, input: Record<string, unknown>): void {
 		this.finishBlock();
+		if (name === "Skill" && typeof input.skill === "string") {
+			// The model chose a skill (SLS-8).
+			this.toolRows.set(id, this.skillRow(input.skill));
+			return;
+		}
 		const row = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-tool" });
 		row.createSpan({ cls: "apollo-tool-name", text: name });
 		const summary = toolSummary(input, this.plugin.vaultPath());
-		if (summary) row.createSpan({ cls: "apollo-tool-summary", text: summary });
+		if (summary) {
+			// File tools' paths open the file (CTX-10).
+			const ref = resolve(summary, this.app, this.plugin.vaultPath());
+			if (ref) createReferenceEl(row, summary, ref).addClass("apollo-tool-summary");
+			else row.createSpan({ cls: "apollo-tool-summary", text: summary });
+		}
 		this.toolRows.set(id, row);
 		this.scrollToEnd();
+	}
+
+	/** A "Skill: name" row linking to its SKILL.md (SLS-8). */
+	private skillRow(name: string): HTMLElement {
+		const row = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-tool apollo-skill" });
+		row.createSpan({ cls: "apollo-tool-name", text: "Skill" });
+		const path = this.plugin.catalogue.get(name)?.path;
+		const nameEl = row.createSpan({ cls: "apollo-tool-summary", text: name });
+		if (path) {
+			nameEl.addClass("apollo-ref");
+			nameEl.dataset.skillPath = path;
+			setTooltip(nameEl, path);
+		}
+		this.scrollToEnd();
+		return row;
+	}
+
+	/** A skill row for a message that runs a skill as a slash command (SLS-8). */
+	private skillRowForCommand(text: string): void {
+		const name = /^\/(\S+)/.exec(text)?.[1];
+		const entry = name ? this.plugin.catalogue.get(name) : undefined;
+		if (entry?.kind === "skill") this.skillRow(entry.name).addClass("is-done");
+	}
+
+	private userBubble(text: string): HTMLElement {
+		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-user" });
+		renderWithReferences(el, text, this.app, this.plugin.vaultPath());
+		return el;
+	}
+
+	/** Renders Markdown, then makes vault paths in it clickable (CTX-10). */
+	private async renderMarkdown(text: string, el: HTMLElement): Promise<void> {
+		await MarkdownRenderer.render(this.app, text, el, "", this);
+		linkifyPaths(el, this.app, this.plugin.vaultPath());
+	}
+
+	private onTranscriptClick(evt: MouseEvent): void {
+		const target = evt.target as HTMLElement | null;
+		const ref = target?.closest<HTMLElement>(".apollo-ref");
+		if (ref?.dataset.path) {
+			evt.preventDefault();
+			void openReference(this.app, ref.dataset.path, { line: Number(ref.dataset.line) || undefined, evt, from: this.leaf });
+			return;
+		}
+		if (ref?.dataset.skillPath) {
+			evt.preventDefault();
+			this.openSkillFile(ref.dataset.skillPath, evt);
+			return;
+		}
+		const link = target?.closest<HTMLAnchorElement>("a.internal-link");
+		if (link) {
+			evt.preventDefault();
+			const href = link.dataset.href ?? link.getAttribute("href");
+			if (href) void this.app.workspace.openLinkText(href, "", Keymap.isModEvent(evt) || "tab");
+		}
+	}
+
+	/** Opens a SKILL.md: as a note when Obsidian indexes it, otherwise in the system editor (dot-folders aren't indexed). */
+	private openSkillFile(path: string, evt: MouseEvent): void {
+		const rel = vaultRelative(path, this.plugin.vaultPath());
+		if (rel && this.app.vault.getFileByPath(rel)) {
+			void openReference(this.app, rel, { evt, from: this.leaf });
+			return;
+		}
+		void (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(path).then((error) => {
+			if (error) new Notice(`Couldn't open ${path}: ${error}`);
+		});
+	}
+
+	/**
+	 * Commands Apollo handles itself (SLS-6): /new, /clear, /fork, /model and
+	 * /mode. Returns true if the text was one of them.
+	 */
+	private runApolloCommand(text: string): boolean {
+		const m = /^\/(new|clear|fork|model|mode)(?:\s+([\s\S]*))?$/.exec(text);
+		if (!m) return false;
+		const arg = m[2]?.trim() ?? "";
+		const clearInput = () => {
+			this.input.value = "";
+			this.app.workspace.requestSaveLayout();
+		};
+		switch (m[1]) {
+			case "new":
+			case "clear":
+				if (arg) return false;
+				clearInput();
+				this.newChat();
+				return true;
+			case "fork": {
+				if (arg) return false;
+				const id = this.sessionId;
+				if (!id) {
+					new Notice("This chat has no session to fork yet.");
+					return true;
+				}
+				clearInput();
+				void this.plugin.forkChat(id);
+				return true;
+			}
+			case "model":
+				clearInput();
+				if (arg) void this.changeModel(arg === "default" ? null : arg);
+				else void this.pickModel();
+				return true;
+			case "mode": {
+				clearInput();
+				if (!arg) {
+					void this.pickMode();
+					return true;
+				}
+				const mode = modeFromArg(arg);
+				if (mode) {
+					this.modeEl.value = mode;
+					void this.changeMode(mode);
+				} else {
+					new Notice(`Unknown mode “${arg}”. Use ask, accept-edits, plan or auto.`);
+				}
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private async pickModel(): Promise<void> {
+		const models = this.plugin.catalogue.models;
+		const options = models.length
+			? models.map((m) => ({ value: m.value, label: m.displayName, note: m.description }))
+			: [{ value: "default", label: "Default", note: "Claude Code's default model. The full list appears after a chat's first message." }];
+		const choice = await pickOne(this.app, options, "Choose a model for this chat");
+		if (choice) await this.changeModel(choice === "default" ? null : choice);
+	}
+
+	private async pickMode(): Promise<void> {
+		const options = Object.entries(PERMISSION_MODES).map(([value, label]) => ({ value, label }));
+		const choice = (await pickOne(this.app, options, "Choose a permission mode")) as PermissionMode | null;
+		if (!choice) return;
+		this.modeEl.value = choice;
+		await this.changeMode(choice);
+	}
+
+	private async changeModel(model: string | null): Promise<void> {
+		try {
+			await this.session.setModel(model);
+			this.note(`Model: ${model ?? "default"}${this.session.running ? "" : ", from your next message"}`);
+			this.app.workspace.requestSaveLayout();
+		} catch (err) {
+			new Notice(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	private startBlock(): void {
@@ -513,7 +696,7 @@ export class ChatView extends ItemView {
 		this.blockEl = null;
 		el.parentElement?.removeClass("is-streaming");
 		el.empty();
-		void MarkdownRenderer.render(this.app, this.blockText, el, "", this);
+		void this.renderMarkdown(this.blockText, el);
 	}
 
 	private note(text: string, cls = "apollo-note"): void {
@@ -612,6 +795,13 @@ export function userPrompt(message: unknown): string {
 function summarise(text: string): string {
 	const line = text.split("\n").find((l) => l.trim())?.trim() ?? text;
 	return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 1)}…` : line;
+}
+
+/** A permission mode from a /mode argument: ask, accept-edits, plan or auto. */
+function modeFromArg(arg: string): PermissionMode | null {
+	const key = arg.toLowerCase().replace(/[\s_-]/g, "");
+	const modes: Record<string, PermissionMode> = { ask: "default", default: "default", acceptedits: "acceptEdits", accept: "acceptEdits", plan: "plan", auto: "auto" };
+	return modes[key] ?? null;
 }
 
 /** One-line description of a tool call's input. */

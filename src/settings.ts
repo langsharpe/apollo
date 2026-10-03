@@ -23,6 +23,14 @@ export const CHAT_PLACEMENTS = {
 
 export type ChatPlacement = keyof typeof CHAT_PLACEMENTS;
 
+/** How file and folder references are written into the input (CTX-8). */
+export const REFERENCE_FORMATS = {
+	plain: "Plain path (Claude reads it if needed)",
+	mention: "@-mention (contents attached)",
+} as const;
+
+export type ReferenceFormat = keyof typeof REFERENCE_FORMATS;
+
 export interface ApolloSettings {
 	/** Absolute path to the `claude` binary. Empty means auto-detect. */
 	cliPath: string;
@@ -31,6 +39,7 @@ export interface ApolloSettings {
 	openChatsIn: ChatPlacement;
 	/** Minutes an idle chat keeps its Claude Code process. 0 keeps it until the chat closes. */
 	idleTimeoutMinutes: number;
+	referenceFormat: ReferenceFormat;
 }
 
 export const DEFAULT_SETTINGS: ApolloSettings = {
@@ -38,6 +47,7 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 	defaultPermissionMode: "default",
 	openChatsIn: "split-right",
 	idleTimeoutMinutes: 10,
+	referenceFormat: "plain",
 };
 
 // The base PluginSettingTab reads `plugin.settings` by control key. Writes go
@@ -91,6 +101,15 @@ export class ApolloSettingTab extends PluginSettingTab {
 					type: "dropdown",
 					key: "openChatsIn" satisfies keyof ApolloSettings,
 					options: CHAT_PLACEMENTS,
+				},
+			},
+			{
+				name: "Reference format",
+				desc: "How files and folders are added to the input, from @, drag and drop, paste and commands. A plain path costs nothing until Claude decides to read it; an @-mention attaches the file's contents to the message.",
+				control: {
+					type: "dropdown",
+					key: "referenceFormat" satisfies keyof ApolloSettings,
+					options: REFERENCE_FORMATS,
 				},
 			},
 			{

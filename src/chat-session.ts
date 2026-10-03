@@ -33,6 +33,8 @@ export class ChatSession {
 		private readonly handlers: ChatSessionHandlers,
 		/** Mode for the next process start. Kept in step with what Claude Code reports. */
 		public permissionMode: PermissionMode,
+		/** Model for the next process start, from /model. Null means Claude Code's default. */
+		public model: string | null = null,
 	) {}
 
 	/** Whether a Claude Code process is running for this chat. */
@@ -71,6 +73,11 @@ export class ChatSession {
 		await this.query?.setPermissionMode(mode);
 	}
 
+	async setModel(model: string | null): Promise<void> {
+		this.model = model;
+		await this.query?.setModel(model ?? undefined);
+	}
+
 	/** Ends the Claude Code process. The session's transcript stays on disk. */
 	close(): void {
 		const abort = this.abort;
@@ -86,6 +93,7 @@ export class ChatSession {
 		const options = buildOptions(this.plugin.settings, env, this.plugin.vaultPath(), {
 			sessionId: this.sessionId,
 			permissionMode: this.permissionMode,
+			model: this.model,
 			abort,
 			onPermissionRequest: this.handlers.permission,
 		});
@@ -100,7 +108,12 @@ export class ChatSession {
 		let error: unknown = null;
 		try {
 			for await (const msg of q) {
-				if (msg.type === "system" && msg.subtype === "init") this.sessionId = msg.session_id;
+				if (msg.type === "system" && msg.subtype === "init") {
+					this.sessionId = msg.session_id;
+					void this.reportCommands(q, msg.skills, msg.terminal_slash_commands ?? []);
+				}
+				// Skills found mid-session (SLS-5).
+				if (msg.type === "system" && msg.subtype === "commands_changed") this.plugin.catalogue.reconcile({ commands: msg.commands });
 				if (msg.type === "result") {
 					this.busy = false;
 					this.startIdleTimer();
@@ -115,6 +128,22 @@ export class ChatSession {
 		this.input?.close();
 		this.reset();
 		this.handlers.ended(error ?? new Error("Claude Code exited."));
+	}
+
+	/**
+	 * Tells the slash menu's catalogue what Claude Code actually loaded
+	 * (SLS-5), and caches the model list for /model. Both answers come from
+	 * the init handshake, so they cost no extra round trip to the model.
+	 */
+	private async reportCommands(q: Query, skills: string[], terminal: string[]): Promise<void> {
+		try {
+			const [commands, models] = await Promise.all([q.supportedCommands(), q.supportedModels()]);
+			this.plugin.catalogue.reconcile({ commands, skills, terminal });
+			this.plugin.catalogue.setModels(models);
+		} catch (err) {
+			// The process may have closed first; the next session reports again.
+			if (this.query === q) console.warn("Apollo: couldn't read Claude Code's commands", err);
+		}
 	}
 
 	private startIdleTimer(): void {

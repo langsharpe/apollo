@@ -5,6 +5,8 @@ import type { ShellEnv } from "./cli";
 export interface ChatState {
 	sessionId: string | null;
 	permissionMode: PermissionMode;
+	/** Model alias or ID chosen with /model. Null means Claude Code's default. */
+	model: string | null;
 	abort: AbortController;
 	onPermissionRequest: CanUseTool;
 }
@@ -25,6 +27,7 @@ export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string
 		systemPrompt: { type: "preset", preset: "claude_code" },
 		settingSources: ["user", "project", "local"],
 		permissionMode: chat.permissionMode,
+		...(chat.model ? { model: chat.model } : {}),
 		canUseTool: chat.onPermissionRequest,
 		includePartialMessages: true,
 		abortController: chat.abort,
