@@ -63,6 +63,7 @@ export class ChatView extends ItemView {
 	private infoEl!: HTMLElement;
 	private modeEl!: HTMLSelectElement;
 	private transcriptEl!: HTMLElement;
+	private workingLabelEl!: HTMLElement;
 	private input!: ChatInput;
 	private stopBtn!: HTMLButtonElement;
 
@@ -110,6 +111,11 @@ export class ChatView extends ItemView {
 
 		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
 		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
+
+		// Shown from send until the turn ends, including while a process starts.
+		const working = root.createDiv({ cls: "apollo-working" });
+		working.createDiv({ cls: "apollo-working-spinner" });
+		this.workingLabelEl = working.createSpan();
 
 		const form = root.createDiv({ cls: "apollo-input" });
 		this.input = new ChatInput(form, this.plugin, this, {
@@ -293,6 +299,8 @@ export class ChatView extends ItemView {
 	private async send(text: string, bubbles: HTMLElement[]): Promise<void> {
 		this.stopping = false;
 		this.setStatus("running");
+		// The first message, and the first after a resume or idle release, waits for a process.
+		this.setWorking(this.session.running ? "Working…" : "Starting Claude Code…");
 		// Until Claude Code names the session, the first prompt is the title.
 		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(summarise(text));
 		try {
@@ -308,6 +316,7 @@ export class ChatView extends ItemView {
 	stop(): void {
 		if (!this.session.busy) return;
 		this.stopping = true;
+		this.setWorking("Stopping…");
 		this.returnQueuedToInput();
 		void this.session.interrupt().catch((err) => console.error("Apollo: interrupt failed", err));
 	}
@@ -392,6 +401,7 @@ export class ChatView extends ItemView {
 		switch (msg.type) {
 			case "system":
 				if (msg.subtype === "init") {
+					if (!this.stopping) this.setWorking("Working…");
 					this.model = msg.model;
 					this.updateInfo();
 					this.syncMode(msg.permissionMode);
@@ -783,11 +793,19 @@ export class ChatView extends ItemView {
 		void navigator.clipboard.writeText(id).then(() => new Notice("Session ID copied."));
 	}
 
-	/** Status dot on the info icon and the tab header (TAB-4). */
+	/** Status dot on the info icon and the tab header (TAB-4), and the working indicator. */
 	private setStatus(status: Status): void {
+		// The working indicator takes space from the transcript; keep its end in view.
+		const pinned = this.isNearEnd();
 		this.contentEl.dataset.status = status;
+		if (pinned) this.scrollToEnd(true);
 		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.setAttr("data-apollo-status", status);
 		this.stopBtn.disabled = status === "idle" || status === "error";
+	}
+
+	/** The working indicator's text. It shows while the status is running. */
+	private setWorking(label: string): void {
+		this.workingLabelEl.setText(label);
 	}
 
 	private isNearEnd(): boolean {
