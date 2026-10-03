@@ -275,6 +275,11 @@ export default class ApolloPlugin extends Plugin {
 	async renameChat(sessionId: string, current: string): Promise<void> {
 		const title = await promptText(this.app, "Rename chat", current, "Rename");
 		if (!title || title === current) return;
+		await this.saveChatTitle(sessionId, title);
+	}
+
+	/** Saves a chat's title to its transcript, where the CLI sees it too. Shows a notice if that fails. */
+	async saveChatTitle(sessionId: string, title: string): Promise<void> {
 		try {
 			await this.store.rename(sessionId, title);
 		} catch (err) {

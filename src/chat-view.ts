@@ -140,6 +140,9 @@ export class ChatView extends ItemView {
 
 		this.registerDomEvent(sendBtn, "click", () => this.submit());
 		this.registerDomEvent(this.stopBtn, "click", () => this.stop());
+		// Double-click the view header's title to rename the chat in place.
+		const titleEl = (this as ViewInternals).titleEl;
+		if (titleEl) this.registerDomEvent(titleEl, "dblclick", () => this.editTitle(titleEl));
 		// Renames, from here or the chat list, and Claude Code's own titles.
 		this.registerEvent(this.plugin.store.onChanged(() => void this.refreshTitle()));
 
@@ -728,8 +731,42 @@ export class ChatView extends ItemView {
 		if (title === this.title) return;
 		this.title = title;
 		(this.leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
-		(this as ViewInternals).titleEl?.setText(title);
+		const titleEl = (this as ViewInternals).titleEl;
+		// Leave a title being edited alone; it picks up the latest when editing ends.
+		if (titleEl && !titleEl.isContentEditable) titleEl.setText(title);
 		this.app.workspace.requestSaveLayout();
+	}
+
+	/** Makes the view header's title editable. Enter or clicking away saves; Escape cancels. */
+	private editTitle(el: HTMLElement): void {
+		const id = this.sessionId;
+		if (!id || el.isContentEditable) return;
+		let cancelled = false;
+		const onKeydown = (evt: KeyboardEvent) => {
+			if (evt.isComposing) return;
+			if (evt.key === "Enter" || evt.key === "Escape") {
+				evt.preventDefault();
+				evt.stopPropagation();
+				cancelled = evt.key === "Escape";
+				el.blur();
+			}
+		};
+		const finish = () => {
+			el.removeEventListener("keydown", onKeydown);
+			el.removeAttribute("contenteditable");
+			// Pasted text may span lines.
+			const title = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+			el.setText(this.title);
+			if (cancelled || !title || title === this.title || id !== this.sessionId) return;
+			this.setTitle(title);
+			// On failure, puts back the saved title.
+			void this.plugin.saveChatTitle(id, title).then(() => this.refreshTitle());
+		};
+		el.addEventListener("keydown", onKeydown);
+		el.addEventListener("blur", finish, { once: true });
+		el.contentEditable = "plaintext-only";
+		el.focus();
+		window.getSelection()?.selectAllChildren(el);
 	}
 
 	private updateInfo(): void {
