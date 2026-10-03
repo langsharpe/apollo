@@ -68,7 +68,140 @@
 	padding: var(--size-2-1);
 }
 
-/* Tool calls: one compact row each. */
+/* Tool calls: consecutive calls collapse into one activity group (RND-2). */
+.apollo-activity {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	min-width: 0;
+}
+
+.apollo-activity-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	min-width: 0;
+	margin-left: calc(-1 * var(--size-2-2));
+	padding: var(--size-2-1) var(--size-2-2);
+	border-radius: var(--radius-s);
+	cursor: var(--cursor);
+}
+
+.apollo-activity-header:hover {
+	background: var(--background-modifier-hover);
+}
+
+.apollo-activity-chevron {
+	display: flex;
+	color: var(--text-faint);
+	transition: transform 100ms ease-in-out;
+}
+
+.apollo-activity-chevron svg {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.apollo-activity.is-open .apollo-activity-chevron {
+	transform: rotate(90deg);
+}
+
+.apollo-activity-status {
+	flex-shrink: 0;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--color-green);
+}
+
+.apollo-activity[data-state="running"] .apollo-activity-status {
+	background: none;
+	border: 1.5px solid var(--background-modifier-border);
+	border-top-color: var(--text-accent);
+	animation: apollo-spin 0.8s linear infinite;
+}
+
+.apollo-activity[data-state="error"] .apollo-activity-status {
+	background: var(--color-red);
+}
+
+.apollo-activity[data-state="stopped"] .apollo-activity-status {
+	background: none;
+	border: 1.5px solid var(--text-faint);
+}
+
+@keyframes apollo-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.apollo-activity[data-state="running"] .apollo-activity-status {
+		animation: none;
+	}
+}
+
+.apollo-activity-label {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-activity[data-state="running"] .apollo-activity-label {
+	color: var(--text-normal);
+}
+
+.apollo-activity-count {
+	flex-shrink: 0;
+	color: var(--text-faint);
+}
+
+/* Files read and edited, visible even when collapsed. Indented to line up with the label. */
+.apollo-activity-files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-2-1) var(--size-4-2);
+	padding-left: calc(var(--icon-xs) + 8px + 2 * var(--size-4-1));
+}
+
+.apollo-activity-files:empty {
+	display: none;
+}
+
+.apollo-activity-file {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-activity-file:not(.apollo-ref) {
+	color: var(--text-muted);
+}
+
+.apollo-activity-calls {
+	display: none;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	margin-left: calc(var(--icon-xs) / 2 - 1px);
+	padding-left: calc(var(--icon-xs) / 2 + 8px + 2 * var(--size-4-1) - 1px);
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.apollo-activity.is-open .apollo-activity-calls {
+	display: flex;
+}
+
+/* One row per call: in an expanded activity group, or a skill row. */
 .apollo-tool {
 	display: flex;
 	gap: var(--size-4-2);
@@ -90,6 +223,11 @@
 .apollo-tool.is-error::before {
 	content: "●";
 	color: var(--color-red);
+}
+
+.apollo-tool.is-stopped::before {
+	content: "○";
+	color: var(--text-faint);
 }
 
 .apollo-tool-name {

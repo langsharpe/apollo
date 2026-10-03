@@ -1,12 +1,13 @@
 import type { CanUseTool, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { ActivityGroup } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";
 import type ApolloPlugin from "./main";
 import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
-import { createReferenceEl, linkifyPaths, openReference, renderWithReferences, resolve, vaultRelative } from "./references";
+import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { PERMISSION_MODES } from "./settings";
 
@@ -70,8 +71,10 @@ export class ChatView extends ItemView {
 	private blockText = "";
 	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
 	private unidentified: HTMLElement[] = [];
-	/** Tool rows by tool_use id, so results can mark them. */
-	private toolRows = new Map<string, HTMLElement>();
+	/** Marks a tool call done or failed, by tool_use id. */
+	private toolResults = new Map<string, (isError: boolean) => void>();
+	/** Tool call groups in the transcript; the last one takes further calls while nothing follows it. */
+	private activities: ActivityGroup[] = [];
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -255,7 +258,8 @@ export class ChatView extends ItemView {
 		this.stopping = false;
 		this.blockEl = null;
 		this.unidentified = [];
-		this.toolRows.clear();
+		this.toolResults.clear();
+		this.activities = [];
 		this.transcriptEl.empty();
 		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
 		this.setTitle(title || NEW_CHAT_TITLE);
@@ -371,6 +375,7 @@ export class ChatView extends ItemView {
 
 	private onEnded(err: unknown): void {
 		this.finishBlock();
+		this.settleActivities();
 		console.error("Apollo: Claude Code ended", err);
 		this.note(`Error: ${err instanceof Error ? err.message : String(err)}`, "apollo-error");
 		this.returnQueuedToInput();
@@ -418,7 +423,7 @@ export class ChatView extends ItemView {
 			case "user":
 				if (Array.isArray(msg.message.content)) {
 					for (const block of msg.message.content) {
-						if (block.type === "tool_result") this.toolRows.get(block.tool_use_id)?.addClass(block.is_error ? "is-error" : "is-done");
+						if (block.type === "tool_result") this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false);
 					}
 				}
 				break;
@@ -430,6 +435,7 @@ export class ChatView extends ItemView {
 
 	private onTurnEnd(subtype: string, durationMs: number): void {
 		this.finishBlock();
+		this.settleActivities();
 		this.unidentified = [];
 		const secs = (durationMs / 1000).toFixed(1);
 		if (this.stopping) this.note("Stopped.");
@@ -463,7 +469,7 @@ export class ChatView extends ItemView {
 			if (msg.type === "user") {
 				const texts: string[] = [];
 				for (const block of blocks) {
-					if (block.type === "tool_result" && block.tool_use_id) this.toolRows.get(block.tool_use_id)?.addClass(block.is_error ? "is-error" : "is-done");
+					if (block.type === "tool_result" && block.tool_use_id) this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false);
 					else if (block.type === "text" && block.text) texts.push(block.text);
 					else if (block.type === "image") texts.push("[Image]");
 				}
@@ -485,6 +491,8 @@ export class ChatView extends ItemView {
 				}
 			}
 		}
+		// Calls cut off by an interrupted turn never got a result.
+		this.settleActivities();
 		await Promise.all(renders);
 	}
 
@@ -510,20 +518,24 @@ export class ChatView extends ItemView {
 		this.finishBlock();
 		if (name === "Skill" && typeof input.skill === "string") {
 			// The model chose a skill (SLS-8).
-			this.toolRows.set(id, this.skillRow(input.skill));
+			const row = this.skillRow(input.skill);
+			this.toolResults.set(id, (isError) => row.addClass(isError ? "is-error" : "is-done"));
 			return;
 		}
-		const row = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-tool" });
-		row.createSpan({ cls: "apollo-tool-name", text: name });
-		const summary = toolSummary(input, this.plugin.vaultPath());
-		if (summary) {
-			// File tools' paths open the file (CTX-10).
-			const ref = resolve(summary, this.app, this.plugin.vaultPath());
-			if (ref) createReferenceEl(row, summary, ref).addClass("apollo-tool-summary");
-			else row.createSpan({ cls: "apollo-tool-summary", text: summary });
+		// Consecutive calls share a group; anything shown after it starts a new one.
+		let group = this.activities[this.activities.length - 1];
+		if (!group || group.el !== this.transcriptEl.lastElementChild) {
+			group = new ActivityGroup(this.transcriptEl, this.app, this.plugin.vaultPath());
+			this.activities.push(group);
 		}
-		this.toolRows.set(id, row);
+		const target = group;
+		target.add(id, name, input);
+		this.toolResults.set(id, (isError) => target.finish(id, isError));
 		this.scrollToEnd();
+	}
+
+	private settleActivities(): void {
+		for (const group of this.activities) group.settle();
 	}
 
 	/** A "Skill: name" row linking to its SKILL.md (SLS-8). */
@@ -802,15 +814,4 @@ function modeFromArg(arg: string): PermissionMode | null {
 	const key = arg.toLowerCase().replace(/[\s_-]/g, "");
 	const modes: Record<string, PermissionMode> = { ask: "default", default: "default", acceptedits: "acceptEdits", accept: "acceptEdits", plan: "plan", auto: "auto" };
 	return modes[key] ?? null;
-}
-
-/** One-line description of a tool call's input. */
-function toolSummary(input: Record<string, unknown>, vaultPath: string): string {
-	const value = ["file_path", "notebook_path", "command", "pattern", "url", "query", "description", "skill"]
-		.map((key) => input[key])
-		.find((v): v is string => typeof v === "string");
-	if (!value) return "";
-	const prefix = vaultPath.endsWith("/") ? vaultPath : `${vaultPath}/`;
-	const text = value.startsWith(prefix) ? value.slice(prefix.length) : value;
-	return text.length > 120 ? `${text.slice(0, 119)}…` : text;
 }
