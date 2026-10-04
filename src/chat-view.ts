@@ -7,6 +7,7 @@ import { ChatSession } from "./chat-session";
 import type ApolloPlugin from "./main";
 import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
+import { Presenter } from "./presenter";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { PERMISSION_MODES } from "./settings";
@@ -72,10 +73,15 @@ export class ChatView extends ItemView {
 	private blockText = "";
 	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
 	private unidentified: HTMLElement[] = [];
-	/** Marks a tool call done or failed, by tool_use id. */
-	private toolResults = new Map<string, (isError: boolean) => void>();
+	/** Marks a tool call done or failed, by tool_use id, with the result's text. */
+	private toolResults = new Map<string, (isError: boolean, output: string) => void>();
+	/** Write calls that will create a note, by tool_use id, for auto-present (OBS-19). */
+	private newNotes = new Map<string, string>();
 	/** Tool call groups in the transcript; the last one takes further calls while nothing follows it. */
 	private activities: ActivityGroup[] = [];
+
+	/** Opens notes for this chat: workspace_present and auto-present (OBS-14 to OBS-19). */
+	private readonly presenter: Presenter;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -83,6 +89,7 @@ export class ChatView extends ItemView {
 	) {
 		super(leaf);
 		this.mode = plugin.settings.defaultPermissionMode;
+		this.presenter = new Presenter(this.app, () => plugin.settings, leaf, () => this.title);
 	}
 
 	override getViewType(): string {
@@ -159,6 +166,7 @@ export class ChatView extends ItemView {
 
 	override async onClose(): Promise<void> {
 		this.session.close();
+		this.presenter.close();
 	}
 
 	override getState(): Record<string, unknown> {
@@ -260,8 +268,10 @@ export class ChatView extends ItemView {
 						: Promise.resolve({ behavior: "deny", message: "Chat closed." }),
 				ended: (err) => session === this.session && this.onEnded(err),
 				released: () => session === this.session && this.updateInfo(),
+				beforeWrite: (id, input) => session === this.session && this.noteNewFile(id, input),
 			},
 			this.plugin.settings.defaultPermissionMode,
+			this.presenter,
 		);
 		session.sessionId = sessionId;
 		this.session = session;
@@ -274,6 +284,7 @@ export class ChatView extends ItemView {
 		this.blockEl = null;
 		this.unidentified = [];
 		this.toolResults.clear();
+		this.newNotes.clear();
 		this.activities = [];
 		this.transcriptEl.empty();
 		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
@@ -304,6 +315,7 @@ export class ChatView extends ItemView {
 
 	private async send(text: string, bubbles: HTMLElement[]): Promise<void> {
 		this.stopping = false;
+		this.presenter.newTurn();
 		this.setStatus("running");
 		// The first message, and the first after a resume or idle release, waits for a process.
 		this.setWorking(this.session.running ? "Working…" : "Starting Claude Code…");
@@ -444,7 +456,7 @@ export class ChatView extends ItemView {
 			case "user":
 				if (Array.isArray(msg.message.content)) {
 					for (const block of msg.message.content) {
-						if (block.type === "tool_result") this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false);
+						if (block.type === "tool_result") this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
 					}
 				}
 				break;
@@ -490,7 +502,7 @@ export class ChatView extends ItemView {
 			if (msg.type === "user") {
 				const texts: string[] = [];
 				for (const block of blocks) {
-					if (block.type === "tool_result" && block.tool_use_id) this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false);
+					if (block.type === "tool_result" && block.tool_use_id) this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
 					else if (block.type === "text" && block.text) texts.push(block.text);
 					else if (block.type === "image") texts.push("[Image]");
 				}
@@ -551,8 +563,30 @@ export class ChatView extends ItemView {
 		}
 		const target = group;
 		target.add(id, name, input);
-		this.toolResults.set(id, (isError) => target.finish(id, isError));
+		this.toolResults.set(id, (isError, output) => {
+			target.finish(id, isError, output);
+			const created = this.newNotes.get(id);
+			this.newNotes.delete(id);
+			if (created && !isError) void this.autoPresent(created);
+		});
 		this.scrollToEnd();
+	}
+
+	/** Remembers a Write that is about to create a note, when auto-present is on (OBS-19). */
+	private noteNewFile(id: string, input: Record<string, unknown>): void {
+		if (!this.plugin.settings.autoPresent || typeof input.file_path !== "string") return;
+		const rel = vaultRelative(input.file_path, this.plugin.vaultPath());
+		if (!rel || !rel.toLowerCase().endsWith(".md")) return;
+		// The call hasn't run yet, so an existing file means an overwrite.
+		if (!this.app.vault.getAbstractFileByPath(rel)) this.newNotes.set(id, rel);
+	}
+
+	private async autoPresent(path: string): Promise<void> {
+		try {
+			await this.presenter.presentNew(path);
+		} catch (err) {
+			console.warn("Apollo: couldn't present", path, err);
+		}
 	}
 
 	private settleActivities(): void {
@@ -835,6 +869,17 @@ interface HistoryBlock {
 	input?: Record<string, unknown>;
 	tool_use_id?: string;
 	is_error?: boolean;
+	content?: unknown;
+}
+
+/** A tool result's text, from either a string or text blocks. */
+function resultText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return (content as { type?: string; text?: string }[])
+		.filter((b) => b.type === "text" && typeof b.text === "string")
+		.map((b) => b.text!)
+		.join("\n");
 }
 
 const INTERRUPTED = "[Request interrupted by user]";

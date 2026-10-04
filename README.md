@@ -39,7 +39,9 @@ Type `@` in the input to pick a file or folder, or drag one in from the file exp
 
 Type `/` to open the slash menu: Apollo's own commands (`/new`, `/clear`, `/fork`, `/model`, `/mode`), skills, custom commands, MCP prompts and Claude Code's built-ins. It's served from a catalogue Apollo builds by scanning `.claude/skills`, `.claude/commands`, `~/.claude` and enabled plugins, then reconciles with what Claude Code reports when a chat starts.
 
-The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md), [docs/m1-findings.md](docs/m1-findings.md), [docs/m2-findings.md](docs/m2-findings.md) and [docs/m3-findings.md](docs/m3-findings.md).
+Claude also gets **Obsidian tools** that work through Obsidian's own API, inside the plugin: `vault_links` (links, backlinks and unresolved links), `vault_outline`, `vault_frontmatter` and `vault_tags` (property edits written by Obsidian), `vault_query` (find notes by tags, folder, properties and links), `vault_move` (renames that update links), `vault_trash` (follows your Deleted files setting), `workspace_context` (active note, open tabs, selection) and `workspace_present`, which opens a note beside the chat without taking focus. Repeated presents reuse one pane, marked with a small bot icon on its tab; pin it to keep it. Bridges to Dataview, Templater or core Templates, Daily notes and Bases appear when those are enabled. Read-only tools run without asking; the rest follow the permission mode. Moves, trashes and property edits show a before/after summary in the chat. Settings → Obsidian tools turns them off, individually or all at once, and sets where presented notes open, how many per turn, and whether notes Claude creates open automatically.
+
+The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md), [docs/m1-findings.md](docs/m1-findings.md), [docs/m2-findings.md](docs/m2-findings.md), [docs/m3-findings.md](docs/m3-findings.md) and [docs/m5-obsidian-tools.md](docs/m5-obsidian-tools.md).
 
 ## Probing Claude Code behaviour
 
@@ -50,6 +52,8 @@ node scripts/probe-m1.mts           # streaming input, interrupt, permission mod
 node scripts/probe-m2.mts           # message UUIDs, forks, rename and delete (Haiku turns, sessions cleaned up)
 node scripts/probe-m3.mts           # command lists and skill precedence, no model calls
 node scripts/probe-m3.mts --turns   # also slash commands, skills and quoted @-mentions (Haiku turns)
+node scripts/probe-m5.mts           # in-process MCP server next to project servers and strict mode, no model calls
+node scripts/probe-m5.mts --turns   # also alwaysLoad vs deferred tools, allowedTools, tool errors (Haiku turns)
 ```
 
 ## Install elsewhere

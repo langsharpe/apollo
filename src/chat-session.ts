@@ -2,6 +2,8 @@ import { query, type CanUseTool, type PermissionMode, type Query, type SDKMessag
 import { resolveShellEnv } from "./cli";
 import { buildOptions } from "./config";
 import type ApolloPlugin from "./main";
+import type { Presenter } from "./presenter";
+import { createVaultServer } from "./vault-tools";
 
 export interface ChatSessionHandlers {
 	message(msg: SDKMessage): void;
@@ -10,6 +12,8 @@ export interface ChatSessionHandlers {
 	ended(error: unknown): void;
 	/** The process was stopped after sitting idle. The next message resumes the session. */
 	released(): void;
+	/** A Write is about to run. */
+	beforeWrite(toolUseId: string, input: Record<string, unknown>): void;
 }
 
 /**
@@ -33,6 +37,8 @@ export class ChatSession {
 		private readonly handlers: ChatSessionHandlers,
 		/** Mode for the next process start. Kept in step with what Claude Code reports. */
 		public permissionMode: PermissionMode,
+		/** Opens notes for workspace_present, in the chat's workspace. */
+		private readonly presenter: Presenter,
 		/** Model for the next process start, from /model. Null means Claude Code's default. */
 		public model: string | null = null,
 	) {}
@@ -90,12 +96,26 @@ export class ChatSession {
 	private async start(): Promise<void> {
 		const env = await resolveShellEnv();
 		const abort = new AbortController();
-		const options = buildOptions(this.plugin.settings, env, this.plugin.vaultPath(), {
+		const { settings } = this.plugin;
+		const vaultPath = this.plugin.vaultPath();
+		// A fresh server per process: an MCP server instance serves one connection.
+		const vaultTools = settings.obsidianTools
+			? createVaultServer({
+					app: this.plugin.app,
+					vaultPath,
+					disabled: settings.disabledObsidianTools,
+					present: (path, req) => this.presenter.present(path, req),
+					presentationPath: () => this.presenter.presentationPath(),
+				})
+			: null;
+		const options = buildOptions(settings, env, vaultPath, {
 			sessionId: this.sessionId,
 			permissionMode: this.permissionMode,
 			model: this.model,
 			abort,
 			onPermissionRequest: this.handlers.permission,
+			beforeWrite: this.handlers.beforeWrite,
+			vaultTools,
 		});
 		this.abort = abort;
 		this.input = new MessageQueue();

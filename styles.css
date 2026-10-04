@@ -265,6 +265,36 @@
 	white-space: nowrap;
 }
 
+/* Why an Obsidian tool call failed, under its row. */
+.apollo-tool:has(.apollo-tool-output) {
+	flex-wrap: wrap;
+}
+
+.apollo-tool-output {
+	flex-basis: 100%;
+	padding-left: calc(1em + var(--size-4-2));
+	color: var(--text-error);
+}
+
+/* Before/after summaries of moves, trashes and property edits (OBS-13), visible even when collapsed. */
+.apollo-activity-changes {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	padding-left: calc(var(--icon-xs) + 8px + 2 * var(--size-4-1));
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.apollo-activity-changes:empty {
+	display: none;
+}
+
+.apollo-activity-change {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
 /* Permission cards. */
 .apollo-card {
 	display: flex;
@@ -693,6 +723,15 @@ code.apollo-ref {
 
 .workspace-tab-header[data-apollo-status="error"] .workspace-tab-header-inner-icon::after {
 	background: var(--color-red);
+}
+
+/* Marks the tab where a chat shows notes (OBS-17). */
+.apollo-presentation-marker {
+	display: flex;
+	align-items: center;
+	flex-shrink: 0;
+	color: var(--text-faint);
+	--icon-size: var(--icon-xs);
 }
 
 /* Chat list. */

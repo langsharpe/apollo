@@ -2,6 +2,7 @@ import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
 import type ApolloPlugin from "./main";
+import { OBSIDIAN_TOOLS } from "./vault-tools";
 
 /** Permission modes a chat can use (PRM-T1). Bypass is deliberately absent in v1. */
 export const PERMISSION_MODES = {
@@ -31,6 +32,15 @@ export const REFERENCE_FORMATS = {
 
 export type ReferenceFormat = keyof typeof REFERENCE_FORMATS;
 
+/** Where workspace_present opens a note when the agent gives no hint (OBS-14). */
+export const PRESENT_PLACEMENTS = {
+	auto: "Auto",
+	beside: "Beside the chat",
+	tab: "New tab",
+} as const;
+
+export type PresentPlacement = keyof typeof PRESENT_PLACEMENTS;
+
 export interface ApolloSettings {
 	/** Absolute path to the `claude` binary. Empty means auto-detect. */
 	cliPath: string;
@@ -40,6 +50,17 @@ export interface ApolloSettings {
 	/** Minutes an idle chat keeps its Claude Code process. 0 keeps it until the chat closes. */
 	idleTimeoutMinutes: number;
 	referenceFormat: ReferenceFormat;
+	/** Register Apollo's in-process MCP server of Obsidian tools (OBS-1). */
+	obsidianTools: boolean;
+	/** Obsidian tools turned off individually, by tool name. */
+	disabledObsidianTools: string[];
+	presentPlacement: PresentPlacement;
+	/** Focus a presented note instead of leaving focus where it was (OBS-16). */
+	presentFocus: boolean;
+	/** Presents allowed per turn (OBS-18). */
+	presentMaxPerTurn: number;
+	/** Present notes the agent creates with Write (OBS-19). */
+	autoPresent: boolean;
 }
 
 export const DEFAULT_SETTINGS: ApolloSettings = {
@@ -48,7 +69,16 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 	openChatsIn: "split-right",
 	idleTimeoutMinutes: 10,
 	referenceFormat: "plain",
+	obsidianTools: true,
+	disabledObsidianTools: [],
+	presentPlacement: "auto",
+	presentFocus: false,
+	presentMaxPerTurn: 3,
+	autoPresent: false,
 };
+
+/** Control keys for per-tool toggles, which are stored in `disabledObsidianTools`. */
+const TOOL_KEY = "obsidianTool:";
 
 // The base PluginSettingTab reads `plugin.settings` by control key. Writes go
 // through the plugin, because data.json also holds chat metadata.
@@ -60,9 +90,23 @@ export class ApolloSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
+	override getControlValue(key: string): unknown {
+		if (key.startsWith(TOOL_KEY)) return !this.plugin.settings.disabledObsidianTools.includes(key.slice(TOOL_KEY.length));
+		return super.getControlValue(key);
+	}
+
 	override async setControlValue(key: string, value: unknown): Promise<void> {
-		(this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
+		const settings = this.plugin.settings;
+		if (key.startsWith(TOOL_KEY)) {
+			const name = key.slice(TOOL_KEY.length);
+			const others = settings.disabledObsidianTools.filter((n) => n !== name);
+			settings.disabledObsidianTools = value ? others : [...others, name];
+		} else {
+			(settings as unknown as Record<string, unknown>)[key] = value;
+		}
 		await this.plugin.save();
+		// Tool toggles only show while the tools are on.
+		if (key === "obsidianTools") this.update();
 	}
 
 	override getSettingDefinitions(): SettingDefinitionItem[] {
@@ -121,6 +165,52 @@ export class ApolloSettingTab extends PluginSettingTab {
 					min: 0,
 					step: 1,
 				},
+			},
+			{
+				type: "group",
+				heading: "Obsidian tools",
+				items: [
+					{
+						name: "Include Obsidian tools",
+						desc: "Gives Claude tools that use Obsidian's own API: links and backlinks, outlines, frontmatter and tag edits, link-safe moves, trash, and opening notes for you to look at. They run inside Obsidian, so there's no extra process. Read-only tools run without asking; the rest follow the chat's permission mode. Applies from a chat's next Claude Code process.",
+						control: { type: "toggle", key: "obsidianTools" satisfies keyof ApolloSettings },
+					},
+					{
+						type: "page",
+						name: "Choose tools",
+						desc: "Turn individual Obsidian tools on or off.",
+						displayValue: () => {
+							const on = OBSIDIAN_TOOLS.filter((t) => !this.plugin.settings.disabledObsidianTools.includes(t.name)).length;
+							return `${on} of ${OBSIDIAN_TOOLS.length} on`;
+						},
+						visible: () => this.plugin.settings.obsidianTools,
+						items: OBSIDIAN_TOOLS.map((t) => ({
+							name: t.name,
+							desc: t.requires ? `${t.summary} Only offered when ${t.requires} is enabled.` : t.summary,
+							control: { type: "toggle" as const, key: `${TOOL_KEY}${t.name}` },
+						})),
+					},
+					{
+						name: "Present: default placement",
+						desc: "Where workspace_present opens a note when Claude doesn't say. Auto reuses a note already open, then this chat's presentation pane, then a tab beside your last note, and otherwise splits the chat.",
+						control: { type: "dropdown", key: "presentPlacement" satisfies keyof ApolloSettings, options: PRESENT_PLACEMENTS },
+					},
+					{
+						name: "Present: focus the note",
+						desc: "Move the cursor to a presented note. Off keeps it where it was, usually the chat input.",
+						control: { type: "toggle", key: "presentFocus" satisfies keyof ApolloSettings },
+					},
+					{
+						name: "Present: max per turn",
+						desc: "Notes Claude can open for you in one turn. Past the limit, it lists them as links instead.",
+						control: { type: "number", key: "presentMaxPerTurn" satisfies keyof ApolloSettings, min: 1, step: 1 },
+					},
+					{
+						name: "Auto-present new notes",
+						desc: "Open notes Claude creates with Write, the same way as workspace_present, within the same limit.",
+						control: { type: "toggle", key: "autoPresent" satisfies keyof ApolloSettings },
+					},
+				],
 			},
 		];
 	}

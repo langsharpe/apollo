@@ -1,8 +1,31 @@
 import { setIcon, setTooltip, type App } from "obsidian";
-import { createReferenceEl, resolve } from "./references";
+import { createReferenceEl, linkifyPaths, resolve } from "./references";
+import { VAULT_TOOL_PREFIX } from "./vault-tools";
 
 /** What a tool call does, for a group's summary and progress line. */
-type Kind = "read" | "edit" | "search" | "command" | "fetch" | "web" | "agent" | "other";
+type Kind = "read" | "inspect" | "edit" | "move" | "trash" | "search" | "present" | "command" | "fetch" | "web" | "agent" | "other";
+
+/** Apollo's Obsidian tools (OBS-13): the row's name, and whether a result describes a change to show. */
+const VAULT_TOOLS: Record<string, { label: string; kind: Kind; changes?: boolean }> = {
+	vault_links: { label: "Links", kind: "inspect" },
+	vault_outline: { label: "Outline", kind: "inspect" },
+	vault_frontmatter: { label: "Frontmatter", kind: "edit", changes: true },
+	vault_tags: { label: "Tags", kind: "edit", changes: true },
+	vault_query: { label: "Query", kind: "search" },
+	vault_move: { label: "Move", kind: "move", changes: true },
+	vault_trash: { label: "Trash", kind: "trash", changes: true },
+	workspace_context: { label: "Workspace", kind: "other" },
+	workspace_present: { label: "Show note", kind: "present" },
+	dataview_query: { label: "Dataview", kind: "search" },
+	template_create: { label: "Template", kind: "edit", changes: true },
+	daily_note: { label: "Daily note", kind: "other" },
+	bases_query: { label: "Bases", kind: "search" },
+};
+
+/** An Obsidian tool's entry, or undefined for any other tool. */
+function vaultTool(name: string): (typeof VAULT_TOOLS)[string] | undefined {
+	return name.startsWith(VAULT_TOOL_PREFIX) ? VAULT_TOOLS[name.slice(VAULT_TOOL_PREFIX.length)] : undefined;
+}
 
 type CallState = "pending" | "done" | "error" | "stopped";
 
@@ -14,6 +37,10 @@ interface Call {
 	path: string | null;
 	/** "Reading notes/a.md", shown while the call runs. */
 	progress: string;
+	/** The result describes a change (move, trash, property edit) to show under the group. */
+	changes: boolean;
+	/** One of Apollo's Obsidian tools, whose errors are short sentences worth showing. */
+	vault: boolean;
 }
 
 const SUMMARY_LENGTH = 120;
@@ -31,6 +58,7 @@ export class ActivityGroup {
 	private readonly labelEl: HTMLElement;
 	private readonly countEl: HTMLElement;
 	private readonly filesEl: HTMLElement;
+	private readonly changesEl: HTMLElement;
 	private readonly callsEl: HTMLElement;
 	private readonly calls = new Map<string, Call>();
 	/** File links by path; `edited` wins over read when a file is both. */
@@ -48,6 +76,7 @@ export class ActivityGroup {
 		this.labelEl = this.headerEl.createSpan({ cls: "apollo-activity-label" });
 		this.countEl = this.headerEl.createSpan({ cls: "apollo-activity-count" });
 		this.filesEl = this.el.createDiv({ cls: "apollo-activity-files" });
+		this.changesEl = this.el.createDiv({ cls: "apollo-activity-changes" });
 		this.callsEl = this.el.createDiv({ cls: "apollo-activity-calls" });
 		this.headerEl.addEventListener("click", () => this.toggle());
 		this.headerEl.addEventListener("keydown", (evt) => {
@@ -63,11 +92,14 @@ export class ActivityGroup {
 	}
 
 	add(id: string, name: string, input: Record<string, unknown>): void {
-		const kind = toolKind(name);
-		const summary = toolSummary(input, this.vaultPath);
+		const vault = vaultTool(name);
+		// vault_frontmatter with nothing to set or remove only reads.
+		const readsOnly = vault?.label === "Frontmatter" && !input.set && !(Array.isArray(input.remove) && input.remove.length);
+		const kind = readsOnly ? "inspect" : (vault?.kind ?? toolKind(name));
+		const summary = vault?.kind === "move" ? `${shorten(String(input.from ?? ""), this.vaultPath, 55)} → ${shorten(String(input.to ?? ""), this.vaultPath, 55)}` : toolSummary(input, this.vaultPath);
 		const row = this.callsEl.createDiv({ cls: "apollo-tool" });
-		row.createSpan({ cls: "apollo-tool-name", text: name });
-		const path = filePath(input);
+		row.createSpan({ cls: "apollo-tool-name", text: vault?.label ?? name });
+		const path = vault ? this.existingPath(input.path) : filePath(input);
 		if (summary) {
 			// File tools' paths open the file (CTX-10).
 			const ref = resolve(summary, this.app, this.vaultPath);
@@ -78,16 +110,26 @@ export class ActivityGroup {
 				if (full !== summary) setTooltip(el, full);
 			}
 		}
-		this.calls.set(id, { kind, state: "pending", row, path, progress: progressText(kind, name, input, this.vaultPath) });
-		if (path && (kind === "read" || kind === "edit")) this.addFile(path, kind === "edit");
+		const progress = vault ? vaultProgress(name.slice(VAULT_TOOL_PREFIX.length), kind, input, this.vaultPath) : progressText(kind, name, input, this.vaultPath);
+		this.calls.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault });
+		if (path && (kind === "read" || kind === "inspect" || kind === "edit")) this.addFile(path, kind === "edit");
 		this.render();
 	}
 
-	finish(id: string, isError: boolean): void {
+	/** Marks a call done or failed. `output` is the result's text. */
+	finish(id: string, isError: boolean, output = ""): void {
 		const call = this.calls.get(id);
 		if (!call || call.state !== "pending") return;
 		call.state = isError ? "error" : "done";
 		call.row.addClass(isError ? "is-error" : "is-done");
+		// Structural changes stay in view as a before/after summary (OBS-13).
+		if (call.changes && !isError && output && !output.startsWith("No changes")) {
+			linkifyPaths(this.changesEl.createDiv({ cls: "apollo-activity-change", text: output }), this.app, this.vaultPath);
+		}
+		// Obsidian tools say why they failed in a sentence; show it with the call.
+		if (isError && output && call.vault) {
+			call.row.createDiv({ cls: "apollo-tool-output", text: shorten(output, this.vaultPath, 300) });
+		}
 		this.render();
 	}
 
@@ -100,6 +142,11 @@ export class ActivityGroup {
 			call.row.addClass("is-stopped");
 		}
 		this.render();
+	}
+
+	/** A path argument, if it names a file in the vault right now. */
+	private existingPath(value: unknown): string | null {
+		return typeof value === "string" && value && resolve(value, this.app, this.vaultPath) ? value : null;
 	}
 
 	private toggle(): void {
@@ -192,7 +239,11 @@ function summarise(calls: Call[]): string {
 	const add = (n: number, text: (n: number) => string) => n && parts.push(text(n));
 	add(files("read"), (n) => `read ${plural(n, "file", "files")}`);
 	add(files("edit"), (n) => `edited ${plural(n, "file", "files")}`);
+	add(files("inspect"), (n) => `looked at ${plural(n, "note", "notes")}`);
+	add(count("move"), (n) => `moved ${plural(n, "item", "items")}`);
+	add(count("trash"), (n) => `trashed ${plural(n, "item", "items")}`);
 	add(count("search"), (n) => plural(n, "search", "searches"));
+	add(count("present"), (n) => `showed ${plural(n, "note", "notes")}`);
 	add(count("command"), (n) => `ran ${plural(n, "command", "commands")}`);
 	add(count("fetch"), (n) => `fetched ${plural(n, "page", "pages")}`);
 	add(count("web"), (n) => plural(n, "web search", "web searches"));
@@ -226,9 +277,45 @@ function progressText(kind: Kind, name: string, input: Record<string, unknown>, 
 	}
 }
 
+/** "Moving notes/a.md": what a running Obsidian tool call is doing. */
+function vaultProgress(tool: string, kind: Kind, input: Record<string, unknown>, vaultPath: string): string {
+	const str = (key: string) => (typeof input[key] === "string" ? shorten(input[key] as string, vaultPath, 60) : "");
+	const target = (verb: string, value: string) => (value ? `${verb} ${value}` : verb);
+	switch (tool) {
+		case "vault_links":
+			return target("Reading links of", str("path"));
+		case "vault_outline":
+			return target("Outlining", str("path"));
+		case "vault_frontmatter":
+			return target(kind === "inspect" ? "Reading properties of" : "Editing properties of", str("path"));
+		case "vault_tags":
+			return target("Tagging", str("path"));
+		case "vault_query":
+			return "Querying notes";
+		case "vault_move":
+			return target("Moving", str("from"));
+		case "vault_trash":
+			return target("Trashing", str("path"));
+		case "workspace_context":
+			return "Checking open notes";
+		case "workspace_present":
+			return target("Opening", str("path"));
+		case "dataview_query":
+			return "Running a Dataview query";
+		case "template_create":
+			return target("Creating", str("path"));
+		case "daily_note":
+			return "Finding the daily note";
+		case "bases_query":
+			return "Querying bases";
+		default:
+			return `Using ${tool}`;
+	}
+}
+
 /** One-line description of a tool call's input. */
 export function toolSummary(input: Record<string, unknown>, vaultPath: string, max = SUMMARY_LENGTH): string {
-	const value = ["file_path", "notebook_path", "command", "pattern", "url", "query", "description", "skill"]
+	const value = ["file_path", "notebook_path", "path", "command", "pattern", "url", "query", "description", "skill"]
 		.map((key) => input[key])
 		.find((v): v is string => typeof v === "string");
 	return value ? shorten(value, vaultPath, max) : "";
