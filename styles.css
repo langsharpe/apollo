@@ -657,6 +657,7 @@ code.apollo-ref {
 	display: flex;
 	align-items: center;
 	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
 }
 
 /* Info icon with a status dot in its corner. */
