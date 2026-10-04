@@ -39,6 +39,8 @@ export class ChatSession {
 		public permissionMode: PermissionMode,
 		/** Opens notes for workspace_present, in the chat's workspace. */
 		private readonly presenter: Presenter,
+		/** Output style for every process this chat starts. Empty means Claude Code's default prompt. */
+		public outputStyle: string,
 		/** Model for the next process start, from /model. Null means Claude Code's default. */
 		public model: string | null = null,
 	) {}
@@ -112,6 +114,7 @@ export class ChatSession {
 			sessionId: this.sessionId,
 			permissionMode: this.permissionMode,
 			model: this.model,
+			outputStyle: this.outputStyle,
 			abort,
 			onPermissionRequest: this.handlers.permission,
 			beforeWrite: this.handlers.beforeWrite,
@@ -152,14 +155,16 @@ export class ChatSession {
 
 	/**
 	 * Tells the slash menu's catalogue what Claude Code actually loaded
-	 * (SLS-5), and caches the model list for /model. Both answers come from
-	 * the init handshake, so they cost no extra round trip to the model.
+	 * (SLS-5), and caches the model list for /model and the output styles for
+	 * settings. All come from the init handshake, so they cost no extra round
+	 * trip to the model.
 	 */
 	private async reportCommands(q: Query, skills: string[], terminal: string[]): Promise<void> {
 		try {
-			const [commands, models] = await Promise.all([q.supportedCommands(), q.supportedModels()]);
+			const [commands, models, init] = await Promise.all([q.supportedCommands(), q.supportedModels(), q.initializationResult()]);
 			this.plugin.catalogue.reconcile({ commands, skills, terminal });
 			this.plugin.catalogue.setModels(models);
+			this.plugin.catalogue.setOutputStyles(init.available_output_styles);
 		} catch (err) {
 			// The process may have closed first; the next session reports again.
 			if (this.query === q) console.warn("Apollo: couldn't read Claude Code's commands", err);

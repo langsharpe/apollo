@@ -39,6 +39,7 @@ export interface CatalogueCache {
 	scanned?: CatalogueEntry[];
 	reported?: Reported | null;
 	models?: ModelInfo[];
+	outputStyles?: string[];
 }
 
 /** Commands Apollo handles itself and never sends (SLS-6). */
@@ -102,6 +103,8 @@ export class CommandCatalogue extends Events {
 	private scanned: CatalogueEntry[];
 	private reported: Reported | null;
 	models: ModelInfo[];
+	/** Output style names Claude Code last reported, built-in and custom. */
+	outputStyles: string[];
 	private merged: CatalogueEntry[] = [];
 	private byName = new Map<string, CatalogueEntry>();
 	/** Parsed files by path, reused while their mtime is unchanged. */
@@ -122,6 +125,7 @@ export class CommandCatalogue extends Events {
 		this.scanned = cache.scanned ?? [];
 		this.reported = cache.reported ?? null;
 		this.models = cache.models ?? [];
+		this.outputStyles = cache.outputStyles ?? [];
 		this.merge();
 	}
 
@@ -135,7 +139,7 @@ export class CommandCatalogue extends Events {
 	}
 
 	toCache(): CatalogueCache {
-		return { scanned: this.scanned, reported: this.reported, models: this.models };
+		return { scanned: this.scanned, reported: this.reported, models: this.models, outputStyles: this.outputStyles };
 	}
 
 	onChanged(callback: () => void): EventRef {
@@ -201,6 +205,12 @@ export class CommandCatalogue extends Events {
 	setModels(models: ModelInfo[]): void {
 		if (JSON.stringify(models) === JSON.stringify(this.models)) return;
 		this.models = models;
+		this.persist();
+	}
+
+	setOutputStyles(styles: string[]): void {
+		if (JSON.stringify(styles) === JSON.stringify(this.outputStyles)) return;
+		this.outputStyles = styles;
 		this.persist();
 	}
 

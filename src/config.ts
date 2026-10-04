@@ -8,6 +8,8 @@ export interface ChatState {
 	permissionMode: PermissionMode;
 	/** Model alias or ID chosen with /model. Null means Claude Code's default. */
 	model: string | null;
+	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
+	outputStyle: string;
 	abort: AbortController;
 	onPermissionRequest: CanUseTool;
 	/** Called before each Write runs, while the file is still in its old state (OBS-19). */
@@ -18,8 +20,10 @@ export interface ChatState {
 
 /**
  * Builds SDK options from plugin settings (spec §6). M1 covers the basics:
- * vault cwd, CLI path, login-shell PATH, CLI-default prompt and settings,
- * and the chat's permission mode. Obsidian tools come from M5.
+ * vault cwd, CLI path, login-shell PATH, settings sources and the chat's
+ * permission mode. Obsidian tools come from M5. The prompt is always the
+ * claude_code preset, optionally with an output style (M4, §4.4); custom and
+ * appended prompts aren't offered.
  */
 export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string, chat: ChatState): Options {
 	const cliPath = s.cliPath || env.claudePath;
@@ -30,6 +34,8 @@ export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string
 		pathToClaudeCodeExecutable: cliPath,
 		env: { ...process.env, PATH: env.path },
 		systemPrompt: { type: "preset", preset: "claude_code" },
+		// Inline settings sit above the settings files, so this wins over an outputStyle set there.
+		...(chat.outputStyle ? { settings: { outputStyle: chat.outputStyle } } : {}),
 		settingSources: ["user", "project", "local"],
 		permissionMode: chat.permissionMode,
 		...(chat.model ? { model: chat.model } : {}),

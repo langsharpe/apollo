@@ -46,6 +46,8 @@ export interface ApolloSettings {
 	cliPath: string;
 	/** Permission mode for new chats. */
 	defaultPermissionMode: ChatPermissionMode;
+	/** Output style for new chats, on top of Claude Code's preset prompt. Empty means the preset alone (§4.4). */
+	outputStyle: string;
 	openChatsIn: ChatPlacement;
 	/** Minutes an idle chat keeps its Claude Code process. 0 keeps it until the chat closes. */
 	idleTimeoutMinutes: number;
@@ -66,6 +68,7 @@ export interface ApolloSettings {
 export const DEFAULT_SETTINGS: ApolloSettings = {
 	cliPath: "",
 	defaultPermissionMode: "default",
+	outputStyle: "",
 	openChatsIn: "split-right",
 	idleTimeoutMinutes: 10,
 	referenceFormat: "plain",
@@ -109,6 +112,17 @@ export class ApolloSettingTab extends PluginSettingTab {
 		if (key === "obsidianTools") this.update();
 	}
 
+	/** None, then each output style Claude Code last reported. */
+	private outputStyles(): Record<string, string> {
+		const options: Record<string, string> = { "": "None (Claude Code default)" };
+		const current = this.plugin.settings.outputStyle;
+		// "default" is Claude Code's prompt without a style, which None already covers.
+		const styles = this.plugin.catalogue.outputStyles.filter((s) => s !== "default");
+		if (current && !styles.includes(current)) styles.push(current);
+		for (const style of styles) options[style] = style;
+		return options;
+	}
+
 	override getSettingDefinitions(): SettingDefinitionItem[] {
 		return [
 			{
@@ -136,6 +150,15 @@ export class ApolloSettingTab extends PluginSettingTab {
 					type: "dropdown",
 					key: "defaultPermissionMode" satisfies keyof ApolloSettings,
 					options: PERMISSION_MODES,
+				},
+			},
+			{
+				name: "Output style",
+				desc: "Output style for new chats.",
+				control: {
+					type: "dropdown",
+					key: "outputStyle" satisfies keyof ApolloSettings,
+					options: this.outputStyles(),
 				},
 			},
 			{

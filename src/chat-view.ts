@@ -26,6 +26,8 @@ export interface ChatViewState {
 	mode: PermissionMode;
 	/** Model chosen with /model, or null for Claude Code's default. */
 	model: string | null;
+	/** Output style the chat started with; empty for Claude Code's default prompt. */
+	outputStyle: string;
 }
 
 /** Obsidian internals the public API doesn't expose. All may be missing. */
@@ -57,6 +59,8 @@ export class ChatView extends ItemView {
 	private title = NEW_CHAT_TITLE;
 	/** The model Claude Code reports using. */
 	private model: string | null = null;
+	/** The output style Claude Code reports using. */
+	private outputStyle: string | null = null;
 	private queued: { text: string; el: HTMLElement }[] = [];
 	private pendingCards = 0;
 	private stopping = false;
@@ -177,6 +181,7 @@ export class ChatView extends ItemView {
 			scroll: this.transcriptEl && !this.isNearEnd() ? this.transcriptEl.scrollTop : null,
 			mode: this.mode,
 			model: this.session?.model ?? null,
+			outputStyle: this.session?.outputStyle ?? "",
 		};
 		return { ...super.getState(), ...state };
 	}
@@ -190,6 +195,11 @@ export class ChatView extends ItemView {
 			this.renderModeOptions();
 		}
 		if (s.model !== undefined && s.model !== this.session.model) this.session.model = s.model;
+		// Takes effect from the next process, which is always after a restore.
+		if (s.outputStyle !== undefined && s.outputStyle !== this.session.outputStyle) {
+			this.session.outputStyle = s.outputStyle;
+			this.updateInfo();
+		}
 		if (s.draft && !this.input.value) this.input.value = s.draft;
 		await super.setState(state, result);
 	}
@@ -272,11 +282,13 @@ export class ChatView extends ItemView {
 			},
 			this.plugin.settings.defaultPermissionMode,
 			this.presenter,
+			this.plugin.settings.outputStyle,
 		);
 		session.sessionId = sessionId;
 		this.session = session;
 		this.mode = this.plugin.settings.defaultPermissionMode;
 		this.model = null;
+		this.outputStyle = null;
 		this.renderModeOptions();
 		this.queued = [];
 		this.pendingCards = 0;
@@ -423,6 +435,7 @@ export class ChatView extends ItemView {
 				if (msg.subtype === "init") {
 					if (!this.stopping) this.setWorking("Working…");
 					this.model = msg.model;
+					this.outputStyle = msg.output_style;
 					this.updateInfo();
 					this.syncMode(msg.permissionMode);
 					// A new session now has an ID to save and list.
@@ -825,6 +838,9 @@ export class ChatView extends ItemView {
 		const id = this.sessionId;
 		const lines = id ? [] : ["New chat. No session yet."];
 		if (this.model) lines.push(`Model: ${this.model}`);
+		// PRM-1: what Claude Code reports once running, otherwise what the chat will ask for.
+		const style = this.outputStyle ?? this.session.outputStyle;
+		lines.push(`Output style: ${style && style !== "default" ? style : "none"}`);
 		if (id) lines.push(`Session: ${id.slice(0, 8)}`, this.session.running ? "Claude Code is running." : "Claude Code starts on your next message.", "Click to copy the full session ID.");
 		setTooltip(this.infoEl, lines.join("\n"), { placement: "top" });
 	}
