@@ -41,7 +41,7 @@ export class ChatSession {
 		private readonly presenter: Presenter,
 		/** Output style for every process this chat starts. Empty means Claude Code's default prompt. */
 		public outputStyle: string,
-		/** Model for the next process start, from /model. Null means Claude Code's default. */
+		/** Model for the next process start. Null means Claude Code's default. */
 		public model: string | null = null,
 	) {}
 
@@ -82,8 +82,8 @@ export class ChatSession {
 	}
 
 	async setModel(model: string | null): Promise<void> {
-		this.model = model;
 		await this.query?.setModel(model ?? undefined);
+		this.model = model;
 	}
 
 	/** Ends the Claude Code process. The session's transcript stays on disk. */

@@ -61,6 +61,7 @@ Key decisions:
 | TAB-4 | Tab title = session title (first prompt summary, or user rename). Show a status dot: idle, running, awaiting permission, error. |
 | TAB-5 | Tab state (session ID, draft text, scroll position) persists through `getState`/`setState`, so Obsidian restores open chats on restart. |
 | TAB-6 | Idle tabs release their Claude Code process after a configurable timeout (default 10 min) and transparently resume on the next message. Note: releasing the process likely clears Claude Code's in-memory record of seen files, so native file-change notes stop for that session until files are read again. CHG-2 covers this once change awareness ships. |
+| TAB-7 | **Model per tab.** A dropdown in the chat toolbar, beside the permission mode, offers Claude Code's model aliases (`opus`, `sonnet`, `fable`, `haiku`), each labelled with the version it currently resolves to (e.g. "Opus 5.5"), from `supportedModels()`. Labels update when Claude Code moves an alias to a newer version. Switchable mid-chat via `setModel`. New chats start on the **Default model** setting (Opus). `/model` also offers pinned and older versions; a chat on one of those shows it as an extra dropdown entry. The chat's model persists with its tab state (TAB-5). |
 
 ### 4.2 Chat list and resume
 
@@ -242,7 +243,8 @@ The vault currently has little frontmatter, so the emphasis is on tools that let
 | New chat in current pane hotkey | Device | `Mod+Shift+N` |
 | Idle process timeout | Device | 10 min |
 | Max running processes | Device | 4 |
-| Default model / effort | Vault | Claude Code default |
+| Default model | Vault | Opus (options: Opus, Sonnet, Fable, Haiku, labelled with their current versions) |
+| Default effort | Vault | Claude Code default |
 | Include Obsidian tools | Vault | On (per-tool toggles) |
 | Present: default placement | Vault | Auto |
 | Present: focus the note | Vault | Off (focus stays in chat) |
@@ -282,6 +284,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
       ...(chat.permissionMode === 'auto' ? { 'enable-auto-mode': null } : {}),  // confirm in M0
     },
     permissionMode: chat.permissionMode,
+    ...(chat.model ? { model: chat.model } : {}),  // alias or ID; null leaves Claude Code's default
     canUseTool: chat.onPermissionRequest,
     includePartialMessages: true,
     abortController: chat.abort,

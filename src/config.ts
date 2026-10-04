@@ -6,7 +6,7 @@ import { VAULT_SERVER, type VaultServer } from "./vault-tools";
 export interface ChatState {
 	sessionId: string | null;
 	permissionMode: PermissionMode;
-	/** Model alias or ID chosen with /model. Null means Claude Code's default. */
+	/** Model alias or ID. Null means Claude Code's default. */
 	model: string | null;
 	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
 	outputStyle: string;

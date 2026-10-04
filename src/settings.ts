@@ -1,4 +1,4 @@
-import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
 import type ApolloPlugin from "./main";
@@ -13,6 +13,24 @@ export const PERMISSION_MODES = {
 } as const satisfies Partial<Record<PermissionMode, string>>;
 
 export type ChatPermissionMode = keyof typeof PERMISSION_MODES;
+
+/** Models offered before Claude Code has reported its list, which carries the versions. */
+const FALLBACK_MODELS: Record<string, string> = { opus: "Opus", sonnet: "Sonnet", fable: "Fable", haiku: "Haiku" };
+
+/**
+ * The models a chat offers in its toolbar and settings: Claude Code's
+ * aliases, which follow the latest version of each family, labelled with
+ * that version ("Opus 5.5"). Pinned and older models stay in /model. A
+ * current model outside the list is added rather than misreported; null is
+ * Claude Code's own default.
+ */
+export function modelOptions(models: ModelInfo[], current: string | null): Record<string, string> {
+	const aliases = models.filter((m) => m.value !== "default" && !m.value.startsWith("claude-"));
+	const options = aliases.length ? Object.fromEntries(aliases.map((m) => [m.value, m.displayName])) : { ...FALLBACK_MODELS };
+	const value = current ?? "default";
+	if (!(value in options)) options[value] = models.find((m) => m.value === value)?.displayName ?? (current ?? "Default");
+	return options;
+}
 
 /** Where new chats open (TAB-2). */
 export const CHAT_PLACEMENTS = {
@@ -46,6 +64,8 @@ export interface ApolloSettings {
 	cliPath: string;
 	/** Permission mode for new chats. */
 	defaultPermissionMode: ChatPermissionMode;
+	/** Model alias or ID for new chats. */
+	defaultModel: string;
 	/** Output style for new chats, on top of Claude Code's preset prompt. Empty means the preset alone (§4.4). */
 	outputStyle: string;
 	openChatsIn: ChatPlacement;
@@ -68,6 +88,7 @@ export interface ApolloSettings {
 export const DEFAULT_SETTINGS: ApolloSettings = {
 	cliPath: "",
 	defaultPermissionMode: "default",
+	defaultModel: "opus",
 	outputStyle: "",
 	openChatsIn: "split-right",
 	idleTimeoutMinutes: 10,
@@ -150,6 +171,15 @@ export class ApolloSettingTab extends PluginSettingTab {
 					type: "dropdown",
 					key: "defaultPermissionMode" satisfies keyof ApolloSettings,
 					options: PERMISSION_MODES,
+				},
+			},
+			{
+				name: "Default model",
+				desc: "Model for new chats. Each chat can switch model from its toolbar, or use /model for older versions.",
+				control: {
+					type: "dropdown",
+					key: "defaultModel" satisfies keyof ApolloSettings,
+					options: modelOptions(this.plugin.catalogue.models, this.plugin.settings.defaultModel),
 				},
 			},
 			{

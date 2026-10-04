@@ -206,6 +206,8 @@ export class CommandCatalogue extends Events {
 		if (JSON.stringify(models) === JSON.stringify(this.models)) return;
 		this.models = models;
 		this.persist();
+		// Model dropdowns pick up the versions.
+		this.trigger("changed");
 	}
 
 	setOutputStyles(styles: string[]): void {

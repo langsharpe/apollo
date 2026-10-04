@@ -10,7 +10,7 @@ import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
-import { PERMISSION_MODES } from "./settings";
+import { modelOptions, PERMISSION_MODES } from "./settings";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
 
@@ -24,7 +24,7 @@ export interface ChatViewState {
 	/** Transcript scroll position, or null when scrolled to the end. */
 	scroll: number | null;
 	mode: PermissionMode;
-	/** Model chosen with /model, or null for Claude Code's default. */
+	/** Model alias or ID, or null for Claude Code's default. */
 	model: string | null;
 	/** Output style the chat started with; empty for Claude Code's default prompt. */
 	outputStyle: string;
@@ -66,6 +66,7 @@ export class ChatView extends ItemView {
 	private stopping = false;
 
 	private infoEl!: HTMLElement;
+	private modelEl!: HTMLSelectElement;
 	private modeEl!: HTMLSelectElement;
 	private transcriptEl!: HTMLElement;
 	private workingLabelEl!: HTMLElement;
@@ -144,6 +145,10 @@ export class ChatView extends ItemView {
 		setIcon(this.infoEl, "info");
 		// The tooltip shows a short ID, but `claude --resume` needs the full one.
 		this.registerDomEvent(this.infoEl, "click", () => this.copySessionId());
+		this.modelEl = toolbar.createEl("select", { cls: "dropdown apollo-model", attr: { "aria-label": "Model" } });
+		this.registerDomEvent(this.modelEl, "change", () => void this.changeModel(this.modelEl.value === "default" ? null : this.modelEl.value));
+		// The first session reports the model list, with versions.
+		this.registerEvent(this.plugin.catalogue.onChanged(() => this.renderModelOptions()));
 		this.modeEl = toolbar.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
 		this.renderModeOptions();
 		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
@@ -194,7 +199,10 @@ export class ChatView extends ItemView {
 			this.session.permissionMode = s.mode;
 			this.renderModeOptions();
 		}
-		if (s.model !== undefined && s.model !== this.session.model) this.session.model = s.model;
+		if (s.model !== undefined && s.model !== this.session.model) {
+			this.session.model = s.model;
+			this.renderModelOptions();
+		}
 		// Takes effect from the next process, which is always after a restore.
 		if (s.outputStyle !== undefined && s.outputStyle !== this.session.outputStyle) {
 			this.session.outputStyle = s.outputStyle;
@@ -283,12 +291,14 @@ export class ChatView extends ItemView {
 			this.plugin.settings.defaultPermissionMode,
 			this.presenter,
 			this.plugin.settings.outputStyle,
+			this.plugin.settings.defaultModel,
 		);
 		session.sessionId = sessionId;
 		this.session = session;
 		this.mode = this.plugin.settings.defaultPermissionMode;
 		this.model = null;
 		this.outputStyle = null;
+		this.renderModelOptions();
 		this.renderModeOptions();
 		this.queued = [];
 		this.pendingCards = 0;
@@ -406,6 +416,13 @@ export class ChatView extends ItemView {
 		this.mode = actual;
 		this.session.permissionMode = actual;
 		this.renderModeOptions();
+	}
+
+	private renderModelOptions(): void {
+		const current = this.session.model;
+		this.modelEl.empty();
+		for (const [value, text] of Object.entries(modelOptions(this.plugin.catalogue.models, current))) this.modelEl.createEl("option", { value, text });
+		this.modelEl.value = current ?? "default";
 	}
 
 	private renderModeOptions(): void {
@@ -747,11 +764,14 @@ export class ChatView extends ItemView {
 	private async changeModel(model: string | null): Promise<void> {
 		try {
 			await this.session.setModel(model);
-			this.note(`Model: ${model ?? "default"}${this.session.running ? "" : ", from your next message"}`);
+			// Init reported the old model; show the new one until the next process reports.
+			if (this.model) this.model = this.plugin.catalogue.models.find((m) => m.value === (model ?? "default"))?.resolvedModel ?? model ?? this.model;
+			this.updateInfo();
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
 			new Notice(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`);
 		}
+		this.renderModelOptions();
 	}
 
 	private startBlock(): void {
