@@ -15,6 +15,8 @@ export interface CardContext {
 	app: App;
 	component: Component;
 	vaultPath: string;
+	/** Put the caret in the card, for cards that take typed answers. */
+	takeFocus?: boolean;
 }
 
 // Plain text only: escalation reasons may carry ANSI escapes.
@@ -160,43 +162,146 @@ interface Question {
 	options: { label: string; description?: string }[];
 }
 
-/** AskUserQuestion: collect answers and return them as the tool's input. */
+/**
+ * AskUserQuestion: one question at a time, built for dictation. The caret
+ * starts in the free-text answer, Enter moves to the next question and
+ * submits after the last. Clicking an option of a single-choice question
+ * picks it and moves on.
+ */
 function renderQuestions(card: HTMLElement, ctx: CardContext, req: PermissionRequest, finish: Finish): void {
 	const questions = (req.input.questions as Question[] | undefined) ?? [];
 	card.addClass("apollo-card-questions");
-	card.createDiv({ cls: "apollo-card-title", text: "Claude has a question" });
+	card.createDiv({ cls: "apollo-card-title", text: questions.length > 1 ? `Claude has ${questions.length} questions` : "Claude has a question" });
 
-	const readers = questions.map((q, qi) => {
-		const block = card.createDiv({ cls: "apollo-question" });
-		if (q.header) block.createSpan({ cls: "apollo-question-header", text: q.header });
-		block.createDiv({ cls: "apollo-question-text", text: q.question });
+	const tabs = questions.length > 1 ? card.createDiv({ cls: "apollo-question-tabs" }) : null;
+	const pages = questions.map((q, qi) => {
+		const tab = tabs?.createEl("button", { cls: "apollo-question-tab", text: q.header || `Question ${qi + 1}` });
+		if (tab) tab.onclick = () => show(qi);
+
+		const page = card.createDiv({ cls: "apollo-question" });
+		page.createDiv({ cls: "apollo-question-text", text: q.question });
 		const name = `apollo-q-${Date.now()}-${qi}`;
-		const inputs = q.options.map((opt) => {
-			const row = block.createEl("label", { cls: "apollo-question-option" });
+		const boxes = q.options.map((opt) => {
+			const row = page.createEl("label", { cls: "apollo-question-option" });
 			const box = row.createEl("input", { attr: { type: q.multiSelect ? "checkbox" : "radio", name } });
 			const text = row.createDiv();
 			text.createDiv({ text: opt.label });
 			if (opt.description) text.createDiv({ cls: "apollo-card-desc", text: opt.description });
-			return { box, label: opt.label };
+			return { box, row, label: opt.label };
 		});
-		const other = block.createEl("input", { cls: "apollo-question-other", attr: { type: "text", placeholder: "Other…" } });
-		return () => {
-			const picked = inputs.filter((i) => i.box.checked).map((i) => i.label);
+		const other = page.createEl("textarea", {
+			cls: "apollo-question-other",
+			attr: { rows: "1", placeholder: q.multiSelect ? "Type your own answer, or pick above" : "Type your answer, or pick one above" },
+		});
+
+		const read = () => {
+			const picked = boxes.filter((b) => b.box.checked).map((b) => b.label);
 			if (other.value.trim()) picked.push(other.value.trim());
 			return picked.join(", ");
 		};
+		const changed = () => tab?.toggleClass("is-answered", read() !== "");
+
+		other.addEventListener("input", () => {
+			const before = other.offsetHeight;
+			other.style.height = "auto";
+			other.style.height = `${other.scrollHeight}px`;
+			// Long dictation grows the box; keep the buttons below it on screen.
+			if (other.offsetHeight !== before) footer.scrollIntoView({ block: "nearest" });
+			// For a single choice, your own answer replaces the picked option.
+			if (!q.multiSelect && other.value.trim()) for (const b of boxes) b.box.checked = false;
+			changed();
+		});
+		other.addEventListener("keydown", (evt) => {
+			if (evt.key !== "Enter" || evt.shiftKey || evt.isComposing) return;
+			evt.preventDefault();
+			next();
+		});
+		for (const { box, row } of boxes) {
+			// A mouse click (detail > 0), not arrow keys, moves on from a single choice.
+			// On the last question it stops at Submit rather than sending straight away.
+			row.addEventListener("click", (evt) => {
+				if (q.multiSelect || evt.detail === 0) return;
+				window.clearTimeout(advanceTimer);
+				advanceTimer = window.setTimeout(() => {
+					if (current !== qi) return;
+					if (qi < questions.length - 1) next();
+					else forward.focus();
+				}, 150);
+			});
+			box.addEventListener("change", () => {
+				if (!q.multiSelect && box.checked) other.value = "";
+				changed();
+			});
+			box.addEventListener("keydown", (evt) => {
+				if (evt.key !== "Enter") return;
+				evt.preventDefault();
+				if (!q.multiSelect) box.checked = true;
+				changed();
+				next();
+			});
+		}
+		return { page, tab, other, read };
 	});
 
-	const actions = card.createDiv({ cls: "apollo-card-actions" });
-	const submit = actions.createEl("button", { text: "Answer", cls: "mod-cta" });
-	submit.onclick = () => {
-		const answers: Record<string, string> = {};
-		questions.forEach((q, qi) => (answers[q.question] = readers[qi]!()));
-		const summary = Object.values(answers).filter(Boolean).join("; ") || "no answer";
-		finish({ behavior: "allow", updatedInput: { ...req.input, answers } }, `Answered: ${summary}`);
-	};
+	const footer = card.createDiv({ cls: "apollo-question-footer" });
+	const hint = footer.createDiv({ cls: "apollo-question-hint" });
+	const actions = footer.createDiv({ cls: "apollo-card-actions" });
+	const back = actions.createEl("button", { text: "Back" });
+	back.onclick = () => show(current - 1);
 	const skip = actions.createEl("button", { text: "Skip" });
 	skip.onclick = () => finish({ behavior: "deny", message: "The user declined to answer." }, "Question skipped");
+	const forward = actions.createEl("button", { cls: "mod-cta" });
+	forward.onclick = () => next();
+
+	let current = 0;
+	let advanceTimer = 0;
+	function show(index: number, focus = true): void {
+		current = Math.max(0, Math.min(index, pages.length - 1));
+		pages.forEach((p, i) => {
+			p.page.toggle(i === current);
+			p.tab?.toggleClass("is-active", i === current);
+		});
+		const last = current === pages.length - 1;
+		back.toggle(current > 0);
+		forward.setText(last ? "Submit" : "Next");
+		hint.removeClass("is-nudge");
+		hint.setText(last ? "Enter to submit · Shift+Enter for a new line" : "Enter for the next question · Shift+Enter for a new line");
+		if (!focus) return;
+		pages[current]?.other.focus();
+		footer.scrollIntoView({ block: "nearest" });
+	}
+
+	/** Moves to the next question, or submits after the last. An unanswered question stays put. */
+	function next(): void {
+		const page = pages[current];
+		if (!page || !page.read()) {
+			nudge();
+			return;
+		}
+		if (current < pages.length - 1) {
+			show(current + 1);
+			return;
+		}
+		const missing = pages.findIndex((p) => !p.read());
+		if (missing >= 0) {
+			show(missing);
+			nudge();
+			return;
+		}
+		const answers: Record<string, string> = {};
+		questions.forEach((q, qi) => (answers[q.question] = pages[qi]!.read()));
+		finish({ behavior: "allow", updatedInput: { ...req.input, answers } }, `Answered: ${Object.values(answers).join("; ")}`);
+	}
+
+	function nudge(): void {
+		hint.setText("Type an answer or pick an option first");
+		hint.removeClass("is-nudge");
+		void hint.offsetWidth; // restart the animation
+		hint.addClass("is-nudge");
+		pages[current]?.other.focus();
+	}
+
+	show(0, ctx.takeFocus ?? false);
 }
 
 /** Shows what a tool call will do: a command, a diff, or the raw input. */

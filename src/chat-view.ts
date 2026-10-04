@@ -195,6 +195,12 @@ export class ChatView extends ItemView {
 		menu.addItem((item) => item.setSection("action").setTitle("Copy session ID").setIcon("copy").onClick(() => this.copySessionId()));
 	}
 
+	/** Focus is in this chat, or nowhere in particular. */
+	private hasFocus(): boolean {
+		const active = this.containerEl.doc.activeElement;
+		return !active || active === this.containerEl.doc.body || this.containerEl.contains(active);
+	}
+
 	focusInput(): void {
 		this.input.focus();
 	}
@@ -335,12 +341,14 @@ export class ChatView extends ItemView {
 		try {
 			const decision = showPermissionCard(
 				this.transcriptEl,
-				{ app: this.app, component: this, vaultPath: this.plugin.vaultPath() },
+				{ app: this.app, component: this, vaultPath: this.plugin.vaultPath(), takeFocus: this.hasFocus() },
 				{ toolName, input, options, autoMode: this.mode === "auto" },
 			);
 			// A card needs an answer, so always bring it into view.
 			this.scrollToEnd(true);
 			const result = await decision;
+			// The answered card dropped its buttons and fields; give the caret back to the input.
+			if (this.hasFocus()) this.input.focus();
 			// A bare deny ends the turn, the same as Stop.
 			if (result.behavior === "deny" && result.interrupt) this.stopping = true;
 			return result;
