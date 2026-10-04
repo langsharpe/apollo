@@ -57,7 +57,7 @@ Key decisions:
 | TAB-1 | Each chat is an Obsidian leaf hosting a `ChatView`. Multiple chats can be open at once. |
 | TAB-2 | Setting: **Open new chats in** `tab` / `split right` / `split down` / `right sidebar`. Implemented with `workspace.getLeaf('tab')` or `getLeaf('split', direction)`. |
 | TAB-3 | Commands: *New chat*, *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*. All bindable to hotkeys. |
-| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** `Mod+Alt+N` via `addCommand({ hotkeys })` (`Mod+Shift+N` is core *New note in new pane*). If focus is in a note rather than a chat, opens a new chat using the *Open new chats in* setting. Also available as `/new` typed in the input. |
+| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** (proposed `Mod+Shift+N`, confirm no conflict in M0) via `addCommand({ hotkeys })`. If focus is in a note rather than a chat, opens a new chat using the *Open new chats in* setting. Also available as `/new` typed in the input. |
 | TAB-4 | Tab title = session title (first prompt summary, or user rename). Show a status dot: idle, running, awaiting permission, error. |
 | TAB-5 | Tab state (session ID, draft text, scroll position) persists through `getState`/`setState`, so Obsidian restores open chats on restart. |
 | TAB-6 | Idle tabs release their Claude Code process after a configurable timeout (default 10 min) and transparently resume on the next message. Note: releasing the process likely clears Claude Code's in-memory record of seen files, so native file-change notes stop for that session until files are read again. CHG-2 covers this once change awareness ships. |
@@ -69,7 +69,7 @@ Key decisions:
 | HIST-1 | A sidebar `SessionListView` lists sessions for this vault using the SDK's `listSessions({ dir: vaultPath })`, newest first. |
 | HIST-2 | Shows title, last updated, and whether it is open in a tab. Search by title. |
 | HIST-3 | Actions: **Open** (resume in new tab, or focus if already open), **Fork** (`forkSession: true`), **Rename**, **Pin**, **Delete** (with confirm; uses SDK `deleteSession`). |
-| HIST-3a | **Fork from any message.** Every user and assistant message has a *Fork from here* action. It opens a new tab whose session branches at that message (SDK `forkSession(id, { upToMessageId })`, which writes the fork without starting a process; see [M2 findings](docs/m2-findings.md)), leaving the original untouched. Forking from a user message branches just before it and puts the message in the input to edit and resend. The forked tab's title records its parent, and the chat list can group forks under their parent. |
+| HIST-3a | **Fork from any message.** Every user and assistant message has a *Fork from here* action. It opens a new tab whose session branches at that message (`resume` + `resumeSessionAt: <message uuid>` + `forkSession: true`), leaving the original untouched. The forked tab's title records its parent, and the chat list can group forks under their parent. |
 | HIST-4 | Sessions started from the terminal in the vault directory appear in the list and can be resumed. Sessions started in the plugin can be resumed from the terminal with `claude --resume`. |
 | HIST-5 | Reopening a session replays its history into the view (SDK `getSessionMessages`). |
 | HIST-6 | Optional: "Copy chat link" producing `obsidian://apollo?session=<id>` to paste into notes. |
@@ -82,7 +82,7 @@ This replaces copying paths into chat by hand.
 |---|---|
 | CTX-1 | **@ picker.** Typing `@` in the input opens a fuzzy picker over vault files *and folders* (built on Obsidian's suggest APIs and `vault.getAllLoadedFiles()`). |
 | CTX-2 | **Drag and drop.** Dragging a file or folder from the file explorer, a tab header, or a search result into the input inserts a reference chip. Multiple items supported. |
-| CTX-3 | **Context menu.** Right-click a file or folder (`file-menu` event) → *Add to chat* / *Add to new chat* (two items, since submenus aren't public API). Also available on multi-selection (`files-menu`). |
+| CTX-3 | **Context menu.** Right-click a file or folder (`file-menu` event) → *Add to chat*. Submenu: *active chat* / *new chat*. Also available on multi-selection (`files-menu`). |
 | CTX-4 | **Active note command.** *Add current note to chat* (suggested hotkey `Cmd+Shift+L`). |
 | CTX-5 | **Selection command.** *Add selection to chat* inserts `path:L10-L24` plus the selected text as a quoted block. |
 | CTX-6 | **Paste normalisation.** Pasting an absolute path inside the vault converts it to a vault-relative reference chip. Paths outside the vault stay as text, with a warning icon. |
@@ -161,7 +161,7 @@ Typing `/` at the start of the input opens a menu of everything invocable. It mu
 |---|---|
 | PRM-T1 | Permission mode per tab: *Ask* (default), *Accept edits*, *Plan*, *Auto*. Switchable mid-chat via `setPermissionMode`. No bypass mode in v1. |
 | PRM-T2 | `canUseTool` renders an inline approval card: tool, input summary, diff for Edit/Write. Options: allow once, allow for session, deny with feedback. In **Auto** mode, Claude Code's own auto-mode judgement decides what runs unprompted; only the calls it escalates reach the card. The card says when a request came from an auto-mode escalation. |
-| PRM-T3 | Hard rules live in `.claude/settings.json` permissions, not plugin logic. Plugin provides a starter template (deny `rm`/`mv` via Bash, ask for WebFetch/Write/Edit). |
+| PRM-T3 | Hard rules live in `.claude/settings.json` permissions, not plugin logic. The plugin does not ship deny rules by default; Auto mode is the expected default for routine vault work, with the user adding rules as needed. |
 | PRM-T4 | Stop button calls `interrupt()`; queued messages return to the input. |
 
 ### 4.9 Rendering
@@ -194,6 +194,34 @@ Priority: **nice to have**, post-v1. Claude Code already tells the model when a 
 
 Known trade-off: system reminders don't appear in the SDK message stream, so the plugin can't tell whether Claude Code also sent its own note for the same file. Occasional duplicate notices are accepted; the plugin's version is kept concise. `CLAUDE_CODE_DISABLE_ATTACHMENTS` is not used to suppress the native note because it also removes the skills list and @-mention expansion.
 
+### 4.11 Obsidian-native tools (optional)
+
+An in-process MCP server (`createSdkMcpServer`, `type: "sdk"`) exposing Obsidian's own API to the agent as tools, prefixed `mcp__apollo__`. Handlers run inside the plugin with direct access to `app`, so there is no subprocess and no dependency on the Obsidian CLI. Claude Code's built-in Read, Edit, Write, Grep and Glob stay available; these tools add link awareness, metadata *writing*, and link-safe structural operations.
+
+The vault currently has little frontmatter, so the emphasis is on tools that let the agent **build** metadata as it works, not just query it.
+
+| ID | Requirement |
+|---|---|
+| OBS-1 | **Toggle**: *Include Obsidian tools* (vault setting, default on). Off means the server isn't registered and the agent sees only Claude Code's tools. Per-tool toggles in an expandable list. |
+| OBS-2 | **`vault_links(path)`**: outgoing links, backlinks and unresolved links, resolved by Obsidian (aliases, heading links, relative paths). Built from `metadataCache.resolvedLinks`/`unresolvedLinks`, not the undocumented `getBacklinksForFile`. Useful even without frontmatter, since wikilinks already exist. |
+| OBS-3 | **`vault_outline(path)`**: headings, block IDs, tags, embeds and frontmatter from `metadataCache.getFileCache()`, without returning the body. |
+| OBS-4 | **`vault_frontmatter(path, set?, remove?)`**: structured property edits via `fileManager.processFrontMatter()`, so YAML is always valid and formatting is Obsidian's. The primary tool for building up metadata. |
+| OBS-5 | **`vault_tags(path, add?, remove?)`**: add or remove tags in frontmatter `tags`, normalised to Obsidian's tag rules. |
+| OBS-6 | **`vault_query(tags?, folder?, frontmatter?, linksTo?)`**: find notes by metadata and links. Returns paths only. Reports how many notes lack metadata so the agent knows when to fall back to Grep. |
+| OBS-7 | **`vault_move(from, to)`**: rename or move via `fileManager.renameFile()`, updating links per the user's Obsidian settings. |
+| OBS-8 | **`vault_trash(path)`**: delete via `fileManager.trashFile()`, respecting the user's trash setting. |
+| OBS-9 | **`workspace_context()`**: active note, open tabs, current editor selection. |
+| OBS-10 | **Optional bridges**, each shown only if the plugin is installed: Dataview (DQL query), Templater or core Templates (create from template), Daily Notes (today's note path), Bases. |
+| OBS-11 | **No blocking of shell equivalents.** `mv` and `rm` via Bash remain allowed and are governed by the permission mode (Auto by default). Preference for `vault_move` and `vault_trash` is expressed as guidance in the Apollo output style, not as deny rules. |
+| OBS-12 | **Loading**: `vault_links`, `vault_frontmatter` and `vault_move` marked `alwaysLoad` so they don't sit behind tool search; the rest are deferred. |
+| OBS-13 | Tool calls render like built-in ones (RND-2), and structural changes (move, trash, frontmatter) show a before/after summary. |
+| OBS-14 | **`workspace_present(path, heading?, line?, placement?)`**: opens a note for the user to look at. `placement` is a hint: `auto` (default), `beside`, `tab`. Opens in reading or editing view per the user's default. Scrolls to `heading` or `line` if given (via `openLinkText` with a subpath, or `eState.line`). |
+| OBS-15 | **Placement algorithm** for `auto`, evaluated against the leaf hosting the calling chat (the plugin maps session ID to leaf): (1) if the note is already open in any leaf, reveal that leaf and scroll, never duplicate; (2) else reuse this chat's **presentation pane**, a leaf Apollo opened for this chat earlier, replacing its file so repeated presents don't pile up splits; (3) else use the most recently active unpinned markdown leaf in the main area that isn't a chat, opening as a new tab in its tab group; (4) else split the chat leaf side by side (`createLeafBySplit(chatLeaf, 'vertical')`) and mark the new leaf as this chat's presentation pane. If the chat lives in the sidebar, steps 3 and 4 target the main area's active tab group. Pinned leaves are never replaced. |
+| OBS-16 | **No focus stealing.** Opens with `active: false`, so the cursor stays in the chat input. A setting allows focusing the note instead. |
+| OBS-17 | **Presentation pane is visible as such.** Its tab shows a small Apollo marker; closing it simply clears the association, and the next present re-runs the algorithm. Pinning it in Obsidian keeps it out of reuse. |
+| OBS-18 | **Rate limit**: at most N presents per turn (setting, default 3); extra calls return a message telling the agent to list the remaining files as links instead. |
+| OBS-19 | **Auto-present** setting (default off): automatically present notes the agent creates with Write, without a tool call. Uses the same algorithm and rate limit. |
+
 ## 5. Settings summary
 
 | Setting | Scope | Default |
@@ -211,10 +239,15 @@ Known trade-off: system reminders don't appear in the SDK message stream, so the
 | Skills folder / mode | Vault | Empty / Linked |
 | Reference insertion format | Vault | Plain path |
 | Default permission mode | Vault | Ask (options: Ask, Accept edits, Plan, Auto) |
-| New chat in current pane hotkey | Device | `Mod+Alt+N` |
+| New chat in current pane hotkey | Device | `Mod+Shift+N` |
 | Idle process timeout | Device | 10 min |
 | Max running processes | Device | 4 |
 | Default model / effort | Vault | Claude Code default |
+| Include Obsidian tools | Vault | On (per-tool toggles) |
+| Present: default placement | Vault | Auto |
+| Present: focus the note | Vault | Off (focus stays in chat) |
+| Present: max per turn | Vault | 3 |
+| Present: auto-present new notes | Vault | Off |
 | Change awareness | Vault | On (once shipped) |
 | Change awareness: include Grep/Glob hits | Vault | Off |
 | Change awareness: per-turn budget | Vault | ~2k tokens |
@@ -240,17 +273,21 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     settings: {
       ...(s.outputStyle ? { outputStyle: s.outputStyle } : {}),
       ...(s.disableConnectors ? { disableClaudeAiConnectors: true } : {}),
-      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny.map((serverName) => ({ serverName })) } : {}),
+      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny } : {}),
     },
     ...(s.skillsMode === 'plugin' ? { plugins: [{ type: 'local', path: skillsPluginPath }] } : {}),
-    strictMcpConfig: s.strictMcp,
+    ...(s.obsidianTools ? { mcpServers: { apollo: apolloSdkServer(app, s.enabledObsidianTools) } } : {}),
+    extraArgs: {
+      ...(s.strictMcp ? { 'strict-mcp-config': null } : {}),
+      ...(chat.permissionMode === 'auto' ? { 'enable-auto-mode': null } : {}),  // confirm in M0
+    },
     permissionMode: chat.permissionMode,
-    ...(chat.model ? { model: chat.model } : {}),  // from /model (M3)
     canUseTool: chat.onPermissionRequest,
     includePartialMessages: true,
     abortController: chat.abort,
     ...(chat.sessionId ? { resume: chat.sessionId } : {}),
-    // Forks are made up front with forkSession(), then resumed like any session (M2).
+    ...(chat.forkAt ? { resumeSessionAt: chat.forkAt } : {}),
+    ...(chat.fork ? { forkSession: true } : {}),
   };
 }
 ```
@@ -261,7 +298,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 - **Process hygiene.** Every spawned process is tracked and killed on tab close, plugin unload and Obsidian quit.
 - **No telemetry.** Network traffic is only what Claude Code itself makes.
 - **Secrets.** Any values the plugin stores go in Obsidian's SecretStorage, not `data.json`.
-- **Bundling.** SDK bundled into `main.js`, with build-time shims for the Node globals it expects (see [M0 findings](docs/m0-findings.md)); native binary resolved from the user's install, not bundled.
+- **Bundling.** SDK marked external in esbuild; native binary resolved from the user's install, not bundled.
 - **Startup cost.** Plugin load must not spawn processes; the first one starts on the first message.
 - **Debugging.** A *Debug: log raw requests* toggle sets `OTEL_LOG_RAW_API_BODIES=file:<dir>`, so the exact system prompt, tools and reminders can be inspected.
 
@@ -274,26 +311,27 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 | M2 | Tabs and history | TAB-1 to TAB-6, HIST-1 to HIST-5 including fork from any message. CLI interop verified both directions. |
 | M3 | Path helper and slash menu | CTX-1 to CTX-10. SLS-1 to SLS-9 (catalogue, menu, execution), meeting the 50 ms target. |
 | M4 | Prompt and config | All prompt modes, settings-source toggle, injected-context panel. |
-| M5 | MCP and skills | MCP-1 to MCP-6, SKL-1 to SKL-5. |
+| M5 | MCP, skills and Obsidian tools | MCP-1 to MCP-6, SKL-1 to SKL-5, OBS-1 to OBS-19. |
 | M6 | Polish | Diffs, context meter, export, chat links, settings UX. |
 | M7 | Change awareness (nice to have) | CHG-1 to CHG-11. Verified against a resumed session and a renamed note. |
 
 ## 9. Open questions (resolve in M0)
 
-1. ~~Does `deniedMcpServers` in inline SDK `settings` take effect at the same precedence as a settings file, or only in managed settings?~~ **Yes, it works inline (flag-settings tier), but entries must be `{ serverName }` objects; plain strings are silently ignored.** See [M0 findings](docs/m0-findings.md).
-2. ~~Is there a first-class SDK option for strict MCP config, or is `extraArgs` the only route?~~ **Yes: `strictMcpConfig: true`.**
-3. ~~Does the SDK expand `@path` mentions in the prompt the same way the interactive CLI does? Determines whether CTX-8's "@" format attaches contents.~~ **Yes, contents are attached.**
-4. ~~Does `outputStyle` via inline `settings` pick up custom styles from `.claude/output-styles/` in the vault?~~ **Yes, matched by frontmatter `name`; `available_output_styles` in the init response lists them.**
+1. Does `deniedMcpServers` in inline SDK `settings` take effect at the same precedence as a settings file, or only in managed settings?
+2. Is there a first-class SDK option for strict MCP config, or is `extraArgs` the only route?
+3. Does the SDK expand `@path` mentions in the prompt the same way the interactive CLI does? Determines whether CTX-8's "@" format attaches contents.
+4. Does `outputStyle` via inline `settings` pick up custom styles from `.claude/output-styles/` in the vault?
 5. Does the enterprise's managed configuration block any of MCP-2 to MCP-4? Check `/mcp` in the vault from the CLI first.
 6. Symlinked `.claude/skills`: does Obsidian Sync or another sync tool in use replace symlinks? If so, Mode B becomes the default.
-7. ~~Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.~~ **`'vertical'` gives side-by-side.**
-8. ~~How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.~~ **`permissionMode: 'auto'` alone is enough, on a model that supports it. Haiku doesn't, and silently falls back to `default`.** See [M1 findings](docs/m1-findings.md).
-9. ~~Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?~~ **Yes: core *New note in new pane*. M1 uses `Mod+Alt+N`, which is free.**
-10. ~~Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.~~ **Any entry UUID works, for `resumeSessionAt` and `forkSession({ upToMessageId })` alike. Forking at a text block mid-turn is clean; forking at a tool_use whose result is cut off leaves Claude Code treating the call as failed, so Apollo only offers forks on text.** See [M2 findings](docs/m2-findings.md).
+7. Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.
+8. How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.
+9. Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?
+10. Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.
-13. ~~Slash commands via the SDK: confirm that sending `/skill-name args` as the prompt text runs the skill exactly as in the CLI, and whether `supportedCommands()` needs a live query or can be called cheaply at session start.~~ **Yes, skills, commands and MCP prompts run when sent as text. `supportedCommands()` needs a `query()` but no turn: it resolves with the init handshake, so it's free on a session that is starting anyway.** See [M3 findings](docs/m3-findings.md).
-14. ~~Skill shadowing: when the same skill name exists at user and project level, which wins? The catalogue (SLS-5) should mirror Claude Code's precedence.~~ **The user skill wins.** See [M3 findings](docs/m3-findings.md).
+13. Slash commands via the SDK: confirm that sending `/skill-name args` as the prompt text runs the skill exactly as in the CLI, and whether `supportedCommands()` needs a live query or can be called cheaply at session start.
+14. Skill shadowing: when the same skill name exists at user and project level, which wins? The catalogue (SLS-5) should mirror Claude Code's precedence.
+15. Obsidian tools: confirm `createSdkMcpServer` tools work alongside `settingSources` MCP servers and `strictMcp`, and that `alwaysLoad` can be set on an SDK server.
 
 ## 10. References
 
