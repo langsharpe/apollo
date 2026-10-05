@@ -224,6 +224,48 @@
 	display: flex;
 }
 
+/* Thinking (RND-6): a collapsed row like an activity group's header; the summary shows when expanded. */
+.apollo-thinking {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	min-width: 0;
+}
+
+.apollo-thinking.is-open .apollo-activity-chevron {
+	transform: rotate(90deg);
+}
+
+.apollo-thinking.is-streaming .apollo-thinking-label {
+	color: var(--text-normal);
+}
+
+.apollo-thinking-body {
+	display: none;
+	margin-left: calc(var(--icon-xs) / 2 - 1px);
+	padding-left: calc(var(--icon-xs) / 2 + 2 * var(--size-4-1) - 1px);
+	border-left: 1px solid var(--background-modifier-border);
+	overflow-wrap: anywhere;
+}
+
+.apollo-thinking.is-streaming .apollo-thinking-body {
+	white-space: pre-wrap;
+}
+
+.apollo-thinking.is-open .apollo-thinking-body {
+	display: block;
+}
+
+.apollo-thinking-body > :first-child {
+	margin-top: 0;
+}
+
+.apollo-thinking-body > :last-child {
+	margin-bottom: 0;
+}
+
 /* One row per call: in an expanded activity group, or a skill row. */
 .apollo-tool {
 	display: flex;

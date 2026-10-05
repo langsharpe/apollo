@@ -11,6 +11,7 @@ import { Presenter } from "./presenter";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
+import { ThinkingBlock } from "./thinking";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
 
@@ -79,6 +80,8 @@ export class ChatView extends ItemView {
 	// Streaming state for the current text block.
 	private blockEl: HTMLElement | null = null;
 	private blockText = "";
+	/** The thinking block streaming now, if any. */
+	private thinking: ThinkingBlock | null = null;
 	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
 	private unidentified: HTMLElement[] = [];
 	/** Marks a tool call done or failed, by tool_use id, with the result's text. */
@@ -322,6 +325,7 @@ export class ChatView extends ItemView {
 		this.pendingCards = 0;
 		this.stopping = false;
 		this.blockEl = null;
+		this.thinking = null;
 		this.unidentified = [];
 		this.toolResults.clear();
 		this.newNotes.clear();
@@ -496,7 +500,9 @@ export class ChatView extends ItemView {
 			case "stream_event": {
 				const ev = msg.event;
 				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.startBlock();
+				else if (ev.type === "content_block_start" && ev.content_block.type === "thinking") this.startThinking();
 				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.appendBlock(ev.delta.text);
+				else if (ev.type === "content_block_delta" && ev.delta.type === "thinking_delta") this.thinking?.append(ev.delta.thinking);
 				else if (ev.type === "content_block_stop") this.finishBlock();
 				break;
 			}
@@ -550,7 +556,7 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	/** Renders a saved transcript: user prompts, assistant text and tool rows. */
+	/** Renders a saved transcript: user prompts, assistant text, thinking and tool rows. */
 	private async renderHistory(messages: SessionMessage[]): Promise<void> {
 		const renders: Promise<void>[] = [];
 		for (const msg of messages) {
@@ -576,6 +582,10 @@ export class ChatView extends ItemView {
 						const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
 						renders.push(this.renderMarkdown(block.text, el.createDiv()));
 						this.addForkAction(el, msg.uuid, "assistant");
+					} else if (block.type === "thinking" && block.thinking) {
+						const thinking = new ThinkingBlock(this.transcriptEl, (text, el) => this.renderMarkdown(text, el));
+						thinking.append(block.thinking);
+						renders.push(thinking.finish());
 					} else if (block.type === "tool_use" && block.id && block.name) {
 						this.toolRow(block.id, block.name, block.input ?? {});
 					}
@@ -852,8 +862,16 @@ export class ChatView extends ItemView {
 		this.scrollToEnd();
 	}
 
+	private startThinking(): void {
+		this.finishBlock();
+		this.thinking = new ThinkingBlock(this.transcriptEl, (text, el) => this.renderMarkdown(text, el));
+		this.scrollToEnd();
+	}
+
 	// Swap the plain streamed text for rendered Markdown once the block completes.
 	private finishBlock(): void {
+		void this.thinking?.finish();
+		this.thinking = null;
 		const el = this.blockEl;
 		if (!el) return;
 		this.blockEl = null;
@@ -963,6 +981,7 @@ export class ChatView extends ItemView {
 interface HistoryBlock {
 	type: string;
 	text?: string;
+	thinking?: string;
 	id?: string;
 	name?: string;
 	input?: Record<string, unknown>;

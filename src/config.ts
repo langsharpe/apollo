@@ -64,6 +64,9 @@ export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string
 			],
 		},
 		includePartialMessages: true,
+		// Claude Code omits thinking text by default. This asks for summaries
+		// without changing whether or how much Claude thinks (RND-6).
+		extraArgs: { "thinking-display": "summarized" },
 		abortController: chat.abort,
 		...(chat.sessionId ? { resume: chat.sessionId } : {}),
 	};
