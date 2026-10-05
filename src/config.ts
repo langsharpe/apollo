@@ -1,4 +1,4 @@
-import type { CanUseTool, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, EffortLevel, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import type { ApolloSettings } from "./settings";
 import type { ShellEnv } from "./cli";
 import { VAULT_SERVER, type VaultServer } from "./vault-tools";
@@ -8,6 +8,8 @@ export interface ChatState {
 	permissionMode: PermissionMode;
 	/** Model alias or ID. Null means Claude Code's default. */
 	model: string | null;
+	/** Effort level. Null means the model's default. */
+	effort: EffortLevel | null;
 	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
 	outputStyle: string;
 	abort: AbortController;
@@ -39,6 +41,7 @@ export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string
 		settingSources: ["user", "project", "local"],
 		permissionMode: chat.permissionMode,
 		...(chat.model ? { model: chat.model } : {}),
+		...(chat.effort ? { effort: chat.effort } : {}),
 		// Added to the servers from settings, not instead of them. Read-only tools
 		// run without a prompt, like Read and Grep; the rest follow the permission mode.
 		...(chat.vaultTools

@@ -1,4 +1,4 @@
-import type { CanUseTool, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { ActivityGroup } from "./activity";
 import { resolveShellEnv } from "./cli";
@@ -10,7 +10,7 @@ import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
-import { modelOptions, PERMISSION_MODES } from "./settings";
+import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
 
@@ -26,6 +26,8 @@ export interface ChatViewState {
 	mode: PermissionMode;
 	/** Model alias or ID, or null for Claude Code's default. */
 	model: string | null;
+	/** Effort level, or null for the model's default. */
+	effort: EffortLevel | null;
 	/** Output style the chat started with; empty for Claude Code's default prompt. */
 	outputStyle: string;
 }
@@ -67,6 +69,7 @@ export class ChatView extends ItemView {
 
 	private infoEl!: HTMLElement;
 	private modelEl!: HTMLSelectElement;
+	private effortEl!: HTMLSelectElement;
 	private modeEl!: HTMLSelectElement;
 	private transcriptEl!: HTMLElement;
 	private workingLabelEl!: HTMLElement;
@@ -147,8 +150,15 @@ export class ChatView extends ItemView {
 		this.registerDomEvent(this.infoEl, "click", () => this.copySessionId());
 		this.modelEl = toolbar.createEl("select", { cls: "dropdown apollo-model", attr: { "aria-label": "Model" } });
 		this.registerDomEvent(this.modelEl, "change", () => void this.changeModel(this.modelEl.value === "default" ? null : this.modelEl.value));
-		// The first session reports the model list, with versions.
-		this.registerEvent(this.plugin.catalogue.onChanged(() => this.renderModelOptions()));
+		this.effortEl = toolbar.createEl("select", { cls: "dropdown apollo-effort", attr: { "aria-label": "Effort" } });
+		this.registerDomEvent(this.effortEl, "change", () => void this.changeEffort(this.effortEl.value === "default" ? null : (this.effortEl.value as EffortLevel)));
+		// The first session reports the model list, with versions and effort levels.
+		this.registerEvent(
+			this.plugin.catalogue.onChanged(() => {
+				this.renderModelOptions();
+				this.renderEffortOptions();
+			}),
+		);
 		this.modeEl = toolbar.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
 		this.renderModeOptions();
 		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
@@ -186,6 +196,7 @@ export class ChatView extends ItemView {
 			scroll: this.transcriptEl && !this.isNearEnd() ? this.transcriptEl.scrollTop : null,
 			mode: this.mode,
 			model: this.session?.model ?? null,
+			effort: this.session?.effort ?? null,
 			outputStyle: this.session?.outputStyle ?? "",
 		};
 		return { ...super.getState(), ...state };
@@ -202,6 +213,11 @@ export class ChatView extends ItemView {
 		if (s.model !== undefined && s.model !== this.session.model) {
 			this.session.model = s.model;
 			this.renderModelOptions();
+			this.renderEffortOptions();
+		}
+		if (s.effort !== undefined && s.effort !== this.session.effort) {
+			this.session.effort = s.effort;
+			this.renderEffortOptions();
 		}
 		// Takes effect from the next process, which is always after a restore.
 		if (s.outputStyle !== undefined && s.outputStyle !== this.session.outputStyle) {
@@ -292,6 +308,7 @@ export class ChatView extends ItemView {
 			this.presenter,
 			this.plugin.settings.outputStyle,
 			this.plugin.settings.defaultModel,
+			this.plugin.settings.defaultEffort === "default" ? null : this.plugin.settings.defaultEffort,
 		);
 		session.sessionId = sessionId;
 		this.session = session;
@@ -299,6 +316,7 @@ export class ChatView extends ItemView {
 		this.model = null;
 		this.outputStyle = null;
 		this.renderModelOptions();
+		this.renderEffortOptions();
 		this.renderModeOptions();
 		this.queued = [];
 		this.pendingCards = 0;
@@ -423,6 +441,16 @@ export class ChatView extends ItemView {
 		this.modelEl.empty();
 		for (const [value, text] of Object.entries(modelOptions(this.plugin.catalogue.models, current))) this.modelEl.createEl("option", { value, text });
 		this.modelEl.value = current ?? "default";
+	}
+
+	/** Hidden for a model without effort levels. */
+	private renderEffortOptions(): void {
+		const current = this.session.effort;
+		const options = effortOptions(this.plugin.catalogue.models, this.session.model, current);
+		this.effortEl.empty();
+		for (const [value, text] of Object.entries(options)) this.effortEl.createEl("option", { value, text: `${text} effort` });
+		this.effortEl.value = current ?? "default";
+		this.effortEl.toggle(Object.keys(options).length > 0);
 	}
 
 	private renderModeOptions(): void {
@@ -691,11 +719,11 @@ export class ChatView extends ItemView {
 	}
 
 	/**
-	 * Commands Apollo handles itself (SLS-6): /new, /clear, /fork, /model and
-	 * /mode. Returns true if the text was one of them.
+	 * Commands Apollo handles itself (SLS-6): /new, /clear, /fork, /model,
+	 * /effort and /mode. Returns true if the text was one of them.
 	 */
 	private runApolloCommand(text: string): boolean {
-		const m = /^\/(new|clear|fork|model|mode)(?:\s+([\s\S]*))?$/.exec(text);
+		const m = /^\/(new|clear|fork|model|effort|mode)(?:\s+([\s\S]*))?$/.exec(text);
 		if (!m) return false;
 		const arg = m[2]?.trim() ?? "";
 		const clearInput = () => {
@@ -725,6 +753,18 @@ export class ChatView extends ItemView {
 				if (arg) void this.changeModel(arg === "default" ? null : arg);
 				else void this.pickModel();
 				return true;
+			case "effort": {
+				clearInput();
+				if (!arg) {
+					void this.pickEffort();
+					return true;
+				}
+				const level = arg.toLowerCase();
+				if (level === "default" || level === "auto") void this.changeEffort(null);
+				else if (level in EFFORT_LEVELS) void this.changeEffort(level as EffortLevel);
+				else new Notice(`Unknown effort “${arg}”. Use low, medium, high, xhigh, max or default.`);
+				return true;
+			}
 			case "mode": {
 				clearInput();
 				if (!arg) {
@@ -753,6 +793,17 @@ export class ChatView extends ItemView {
 		if (choice) await this.changeModel(choice === "default" ? null : choice);
 	}
 
+	private async pickEffort(): Promise<void> {
+		const levels = effortOptions(this.plugin.catalogue.models, this.session.model, this.session.effort);
+		if (!Object.keys(levels).length) {
+			new Notice("This chat's model has no effort levels.");
+			return;
+		}
+		const options = Object.entries(levels).map(([value, label]) => ({ value, label, note: value === "default" ? "The model's own effort level." : undefined }));
+		const choice = await pickOne(this.app, options, "Choose an effort level for this chat");
+		if (choice) await this.changeEffort(choice === "default" ? null : (choice as EffortLevel));
+	}
+
 	private async pickMode(): Promise<void> {
 		const options = Object.entries(PERMISSION_MODES).map(([value, label]) => ({ value, label }));
 		const choice = (await pickOne(this.app, options, "Choose a permission mode")) as PermissionMode | null;
@@ -772,6 +823,18 @@ export class ChatView extends ItemView {
 			new Notice(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		this.renderModelOptions();
+		// The new model may offer different levels, or none.
+		this.renderEffortOptions();
+	}
+
+	private async changeEffort(effort: EffortLevel | null): Promise<void> {
+		try {
+			await this.session.setEffort(effort);
+			this.app.workspace.requestSaveLayout();
+		} catch (err) {
+			new Notice(`Couldn't switch effort: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		this.renderEffortOptions();
 	}
 
 	private startBlock(): void {

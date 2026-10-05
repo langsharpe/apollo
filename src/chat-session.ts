@@ -1,4 +1,4 @@
-import { query, type CanUseTool, type PermissionMode, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type CanUseTool, type EffortLevel, type PermissionMode, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { resolveShellEnv } from "./cli";
 import { buildOptions } from "./config";
 import type ApolloPlugin from "./main";
@@ -43,6 +43,8 @@ export class ChatSession {
 		public outputStyle: string,
 		/** Model for the next process start. Null means Claude Code's default. */
 		public model: string | null = null,
+		/** Effort for the next process start. Null means the model's default. */
+		public effort: EffortLevel | null = null,
 	) {}
 
 	/** Whether a Claude Code process is running for this chat. */
@@ -86,6 +88,12 @@ export class ChatSession {
 		this.model = model;
 	}
 
+	async setEffort(effort: EffortLevel | null): Promise<void> {
+		// Null resets to the model's default rather than to the start option.
+		await this.query?.applyFlagSettings({ effortLevel: effort });
+		this.effort = effort;
+	}
+
 	/** Ends the Claude Code process. The session's transcript stays on disk. */
 	close(): void {
 		const abort = this.abort;
@@ -114,6 +122,7 @@ export class ChatSession {
 			sessionId: this.sessionId,
 			permissionMode: this.permissionMode,
 			model: this.model,
+			effort: this.effort,
 			outputStyle: this.outputStyle,
 			abort,
 			onPermissionRequest: this.handlers.permission,

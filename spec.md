@@ -62,6 +62,7 @@ Key decisions:
 | TAB-5 | Tab state (session ID, draft text, scroll position) persists through `getState`/`setState`, so Obsidian restores open chats on restart. |
 | TAB-6 | Idle tabs release their Claude Code process after a configurable timeout (default 10 min) and transparently resume on the next message. Note: releasing the process likely clears Claude Code's in-memory record of seen files, so native file-change notes stop for that session until files are read again. CHG-2 covers this once change awareness ships. |
 | TAB-7 | **Model per tab.** A dropdown in the chat toolbar, beside the permission mode, offers Claude Code's model aliases (`opus`, `sonnet`, `fable`, `haiku`), each labelled with the version it currently resolves to (e.g. "Opus 5.5"), from `supportedModels()`. Labels update when Claude Code moves an alias to a newer version. Switchable mid-chat via `setModel`. New chats start on the **Default model** setting (Opus). `/model` also offers pinned and older versions; a chat on one of those shows it as an extra dropdown entry. The chat's model persists with its tab state (TAB-5). |
+| TAB-8 | **Effort per tab.** A dropdown beside the model offers Default (the model's own level) and the levels the chat's model supports (Low, Medium, High, Extra high, Max), from `supportedEffortLevels` in `supportedModels()`. It's hidden for a model without effort (Haiku), and its levels update when the model changes. A process starts with the `effort` option; mid-chat changes go through `applyFlagSettings({ effortLevel })`, where null returns to the model's default. New chats start on the **Default effort** setting. `/effort [level]` does the same from the input, in place of Claude Code's own `/effort`. The chat's effort persists with its tab state (TAB-5). |
 
 ### 4.2 Chat list and resume
 
@@ -147,7 +148,7 @@ Typing `/` at the start of the input opens a menu of everything invocable. It mu
 | ID | Requirement |
 |---|---|
 | SLS-1 | **Slash menu.** `/` at the start of input (or after whitespace) opens a fuzzy-filtered list. Each row: name, description, argument hint, source badge. Keyboard: arrows to move, `Tab` to complete, `Enter` to insert, `Esc` to close. |
-| SLS-2 | **Contents**, grouped: plugin commands (`/new`, `/fork`, `/clear`, `/model`, `/mode`), skills (vault, Skills folder, user, plugin, managed), custom slash commands (`.claude/commands/`), and MCP prompts (`/server:prompt`). |
+| SLS-2 | **Contents**, grouped: plugin commands (`/new`, `/fork`, `/clear`, `/model`, `/effort`, `/mode`), skills (vault, Skills folder, user, plugin, managed), custom slash commands (`.claude/commands/`), and MCP prompts (`/server:prompt`). |
 | SLS-3 | **Preloaded catalogue.** On plugin load (after layout ready, off the critical path) the plugin scans skill and command locations itself and parses frontmatter (`name`, `description`, `argument-hint`): `<vault>/.claude/skills/`, the configured Skills folder, `~/.claude/skills/`, `<vault>/.claude/commands/`, `~/.claude/commands/`, and enabled Claude Code plugin directories. Result cached in memory and in plugin data for the next launch. |
 | SLS-4 | **Live refresh.** Vault watchers update the catalogue when a `SKILL.md` or command file in the vault changes. `~/.claude` paths are re-scanned on window focus (cheap stat check) rather than watched continuously. |
 | SLS-5 | **Reconcile with the authoritative list.** When a session starts, the init message (and `supportedCommands()` where available) lists what Claude Code actually loaded, including managed skills, plugin skills and MCP prompts the scan can't see. The catalogue merges this in, and marks scanned entries Claude Code did not load (e.g. disabled or shadowed) as unavailable. |
@@ -244,7 +245,7 @@ The vault currently has little frontmatter, so the emphasis is on tools that let
 | Idle process timeout | Device | 10 min |
 | Max running processes | Device | 4 |
 | Default model | Vault | Opus (options: Opus, Sonnet, Fable, Haiku, labelled with their current versions) |
-| Default effort | Vault | Claude Code default |
+| Default effort | Vault | Default (the model's own level; options: Low, Medium, High, Extra high, Max) |
 | Include Obsidian tools | Vault | On (per-tool toggles) |
 | Present: default placement | Vault | Auto |
 | Present: focus the note | Vault | Off (focus stays in chat) |
@@ -285,6 +286,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     },
     permissionMode: chat.permissionMode,
     ...(chat.model ? { model: chat.model } : {}),  // alias or ID; null leaves Claude Code's default
+    ...(chat.effort ? { effort: chat.effort } : {}),  // null leaves the model's default
     canUseTool: chat.onPermissionRequest,
     includePartialMessages: true,
     abortController: chat.abort,

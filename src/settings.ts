@@ -1,4 +1,4 @@
-import type { ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel, ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
 import type ApolloPlugin from "./main";
@@ -29,6 +29,33 @@ export function modelOptions(models: ModelInfo[], current: string | null): Recor
 	const options = aliases.length ? Object.fromEntries(aliases.map((m) => [m.value, m.displayName])) : { ...FALLBACK_MODELS };
 	const value = current ?? "default";
 	if (!(value in options)) options[value] = models.find((m) => m.value === value)?.displayName ?? (current ?? "Default");
+	return options;
+}
+
+/** Effort levels, lowest first (TAB-8). */
+export const EFFORT_LEVELS = {
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+	max: "Max",
+} as const satisfies Record<EffortLevel, string>;
+
+/**
+ * The effort levels a model supports, from Claude Code's model list, after
+ * "default" for the model's own default. Empty for a model without effort
+ * (Haiku). Every level is offered until the list arrives. A current level
+ * the model lacks is added rather than misreported; Claude Code runs it at
+ * the nearest level the model has.
+ */
+export function effortOptions(models: ModelInfo[], model: string | null, current: EffortLevel | null): Record<string, string> {
+	const value = model ?? "default";
+	const info = models.find((m) => m.value === value) ?? models.find((m) => m.resolvedModel === value);
+	const levels = info ? (info.supportedEffortLevels ?? []) : (Object.keys(EFFORT_LEVELS) as EffortLevel[]);
+	if (!levels.length) return {};
+	const options: Record<string, string> = { default: "Default" };
+	for (const level of levels) options[level] = EFFORT_LEVELS[level];
+	if (current && !(current in options)) options[current] = EFFORT_LEVELS[current];
 	return options;
 }
 
@@ -66,6 +93,8 @@ export interface ApolloSettings {
 	defaultPermissionMode: ChatPermissionMode;
 	/** Model alias or ID for new chats. */
 	defaultModel: string;
+	/** Effort for new chats, or "default" for the model's own. */
+	defaultEffort: EffortLevel | "default";
 	/** Output style for new chats, on top of Claude Code's preset prompt. Empty means the preset alone (§4.4). */
 	outputStyle: string;
 	openChatsIn: ChatPlacement;
@@ -89,6 +118,7 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 	cliPath: "",
 	defaultPermissionMode: "default",
 	defaultModel: "opus",
+	defaultEffort: "default",
 	outputStyle: "",
 	openChatsIn: "split-right",
 	idleTimeoutMinutes: 10,
@@ -180,6 +210,15 @@ export class ApolloSettingTab extends PluginSettingTab {
 					type: "dropdown",
 					key: "defaultModel" satisfies keyof ApolloSettings,
 					options: modelOptions(this.plugin.catalogue.models, this.plugin.settings.defaultModel),
+				},
+			},
+			{
+				name: "Default effort",
+				desc: "How much Claude thinks in new chats. Default uses each model's own level. Each chat can switch from its toolbar. Models without effort settings, like Haiku, ignore it.",
+				control: {
+					type: "dropdown",
+					key: "defaultEffort" satisfies keyof ApolloSettings,
+					options: { default: "Default", ...EFFORT_LEVELS },
 				},
 			},
 			{

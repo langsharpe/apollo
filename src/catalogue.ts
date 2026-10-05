@@ -48,6 +48,7 @@ export const APOLLO_COMMANDS: CatalogueEntry[] = [
 	{ name: "clear", description: "Same as /new: a fresh session in this pane.", argumentHint: "", kind: "apollo", source: "apollo" },
 	{ name: "fork", description: "Fork this chat into a new tab.", argumentHint: "", kind: "apollo", source: "apollo" },
 	{ name: "model", description: "Set the model for this chat.", argumentHint: "[model]", kind: "apollo", source: "apollo" },
+	{ name: "effort", description: "Set the effort level for this chat.", argumentHint: "[low|medium|high|xhigh|max|default]", kind: "apollo", source: "apollo" },
 	{ name: "mode", description: "Set the permission mode for this chat.", argumentHint: "[ask|accept-edits|plan|auto]", kind: "apollo", source: "apollo" },
 ];
 
@@ -82,6 +83,7 @@ const HIDDEN = new Set([
 	"reset",
 	"clear",
 	"model",
+	"effort",
 ]);
 
 /** Directories scanned for skills and commands (SLS-3). */
