@@ -127,9 +127,6 @@ export class SessionListView extends ItemView {
 		if (store.meta.forkedFrom[id]) setIcon(titleEl.createSpan({ cls: "apollo-session-icon" }), "git-branch");
 		if (store.isPinned(id)) setIcon(titleEl.createSpan({ cls: "apollo-session-icon" }), "pin");
 		titleEl.createSpan({ text: title });
-		const meta = main.createDiv({ cls: "apollo-session-meta" });
-		meta.createSpan({ text: timeAgo(s.lastModified) });
-		if (open.has(id)) meta.createSpan({ cls: "apollo-session-open", text: "Open" });
 		setTooltip(row, title, { placement: "right" });
 
 		const more = row.createDiv({ cls: "apollo-session-more clickable-icon" });
@@ -176,23 +173,4 @@ export class SessionListView extends ItemView {
 		menu.addItem((item) => item.setTitle("Delete…").setIcon("trash-2").setWarning(true).onClick(() => void plugin.deleteChat(id, title)));
 		return menu;
 	}
-}
-
-const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
-	["year", 365 * 24 * 3600],
-	["month", 30 * 24 * 3600],
-	["week", 7 * 24 * 3600],
-	["day", 24 * 3600],
-	["hour", 3600],
-	["minute", 60],
-];
-
-/** "5 minutes ago", "yesterday", and so on. */
-function timeAgo(ms: number): string {
-	const secs = (ms - Date.now()) / 1000;
-	for (const [unit, size] of UNITS) {
-		if (Math.abs(secs) >= size) return relative.format(Math.round(secs / size), unit);
-	}
-	return "just now";
 }

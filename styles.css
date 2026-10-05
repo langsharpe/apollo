@@ -798,7 +798,6 @@ code.apollo-ref {
 .apollo-sessions-list {
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
 	overflow-y: auto;
 }
 
@@ -816,18 +815,25 @@ code.apollo-ref {
 	text-align: center;
 }
 
+/* Rows match the file explorer's (.tree-item-self). */
 .apollo-session {
 	display: flex;
 	align-items: center;
 	gap: var(--size-4-1);
+	margin-bottom: var(--nav-item-margin-bottom);
 	padding: var(--size-4-1) var(--size-4-2);
 	padding-left: calc(var(--size-4-2) + var(--apollo-depth, 0) * var(--size-4-4));
-	border-radius: var(--radius-s);
+	border-radius: var(--nav-item-radius);
+	color: var(--nav-item-color);
+	font-size: var(--nav-item-size);
+	font-weight: var(--nav-item-weight);
+	line-height: var(--line-height-tight);
 	cursor: var(--cursor);
 }
 
 .apollo-session:hover {
-	background: var(--background-modifier-hover);
+	color: var(--nav-item-color-hover);
+	background: var(--nav-item-background-hover);
 }
 
 .apollo-session.is-open {
@@ -864,18 +870,10 @@ code.apollo-ref {
 	height: var(--icon-xs);
 }
 
-.apollo-session-meta {
-	display: flex;
-	gap: var(--size-4-2);
-	color: var(--text-faint);
-	font-size: var(--font-ui-smaller);
-}
-
-.apollo-session-open {
-	color: var(--text-accent);
-}
-
+/* No vertical padding, so it never makes the row taller than a file row. */
 .apollo-session-more {
+	padding: 0 var(--size-2-1);
+	--icon-size: var(--icon-xs);
 	visibility: hidden;
 }
 
