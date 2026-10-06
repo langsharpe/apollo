@@ -48,7 +48,7 @@ interface ViewInternals {
 const NEW_CHAT_TITLE = "New chat";
 const TITLE_LENGTH = 50;
 
-/** Pixels from the bottom within which new output keeps the transcript pinned to the end. */
+/** Pixels from the bottom that still count as being at the end. */
 const STICKY_SCROLL = 40;
 
 /**
@@ -67,6 +67,10 @@ export class ChatView extends ItemView {
 	private queued: { text: string; el: HTMLElement }[] = [];
 	private pendingCards = 0;
 	private stopping = false;
+	/** New output keeps the end of the transcript in view. Only the user's own scrolling clears it. */
+	private pinned = true;
+	/** scrollTop at the last scroll event, to tell scrolling up from content growing. */
+	private lastScrollTop = 0;
 
 	private infoEl!: HTMLElement;
 	private modelEl!: HTMLSelectElement;
@@ -125,7 +129,18 @@ export class ChatView extends ItemView {
 		root.addClass("apollo-chat");
 
 		this.transcriptEl = root.createDiv({ cls: "apollo-transcript" });
-		this.registerDomEvent(this.transcriptEl, "scroll", () => this.app.workspace.requestSaveLayout());
+		this.registerDomEvent(this.transcriptEl, "scroll", () => this.onScroll());
+		// Output often grows after it's added (Markdown rendering, tool results), so follow every change while pinned.
+		const follow = () => this.pinned && this.scrollToEnd();
+		const mutations = new MutationObserver(follow);
+		mutations.observe(this.transcriptEl, { childList: true, subtree: true, characterData: true });
+		// The working indicator, the input growing and pane resizes all shrink the transcript.
+		const resizes = new ResizeObserver(follow);
+		resizes.observe(this.transcriptEl);
+		this.register(() => {
+			mutations.disconnect();
+			resizes.disconnect();
+		});
 
 		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
 		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
@@ -196,7 +211,7 @@ export class ChatView extends ItemView {
 			sessionId: this.sessionId,
 			title: this.title,
 			draft: this.input?.value ?? "",
-			scroll: this.transcriptEl && !this.isNearEnd() ? this.transcriptEl.scrollTop : null,
+			scroll: this.transcriptEl && !this.pinned ? this.transcriptEl.scrollTop : null,
 			mode: this.mode,
 			model: this.session?.model ?? null,
 			effort: this.session?.effort ?? null,
@@ -286,8 +301,11 @@ export class ChatView extends ItemView {
 		if (!messages.length) this.note("No messages found for this session. It may have been deleted.");
 		await this.renderHistory(messages);
 		if (session !== this.session) return;
-		if (scroll == null) this.scrollToEnd(true);
-		else this.transcriptEl.scrollTop = scroll;
+		if (scroll == null) this.scrollToEnd();
+		else {
+			this.transcriptEl.scrollTop = scroll;
+			this.pinned = this.isNearEnd();
+		}
 		void this.refreshTitle();
 	}
 
@@ -331,6 +349,8 @@ export class ChatView extends ItemView {
 		this.newNotes.clear();
 		this.activities = [];
 		this.transcriptEl.empty();
+		this.pinned = true;
+		this.lastScrollTop = 0;
 		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
 		this.setTitle(title || NEW_CHAT_TITLE);
 		this.updateInfo();
@@ -348,7 +368,7 @@ export class ChatView extends ItemView {
 		this.transcriptEl.querySelector(".apollo-empty")?.remove();
 		const el = this.userBubble(text);
 		this.skillRowForCommand(text);
-		this.scrollToEnd(true);
+		this.scrollToEnd();
 		if (this.session.busy) {
 			el.addClass("is-queued");
 			this.queued.push({ text, el });
@@ -401,7 +421,7 @@ export class ChatView extends ItemView {
 				{ toolName, input, options, autoMode: this.mode === "auto" },
 			);
 			// A card needs an answer, so always bring it into view.
-			this.scrollToEnd(true);
+			this.scrollToEnd();
 			const result = await decision;
 			// The answered card dropped its buttons and fields; give the caret back to the input.
 			if (this.hasFocus()) this.input.focus();
@@ -637,7 +657,6 @@ export class ChatView extends ItemView {
 			this.newNotes.delete(id);
 			if (created && !isError) void this.autoPresent(created);
 		});
-		this.scrollToEnd();
 	}
 
 	/** Remembers a Write that is about to create a note, when auto-present is on (OBS-19). */
@@ -672,7 +691,6 @@ export class ChatView extends ItemView {
 			nameEl.dataset.skillPath = path;
 			setTooltip(nameEl, path);
 		}
-		this.scrollToEnd();
 		return row;
 	}
 
@@ -859,13 +877,11 @@ export class ChatView extends ItemView {
 		if (!this.blockEl) this.startBlock();
 		this.blockText += text;
 		this.blockEl!.setText(this.blockText);
-		this.scrollToEnd();
 	}
 
 	private startThinking(): void {
 		this.finishBlock();
 		this.thinking = new ThinkingBlock(this.transcriptEl, (text, el) => this.renderMarkdown(text, el));
-		this.scrollToEnd();
 	}
 
 	// Swap the plain streamed text for rendered Markdown once the block completes.
@@ -882,7 +898,6 @@ export class ChatView extends ItemView {
 
 	private note(text: string, cls = "apollo-note"): void {
 		this.transcriptEl.createDiv({ cls: `apollo-msg ${cls}`, text });
-		this.scrollToEnd();
 	}
 
 	private async refreshTitle(): Promise<void> {
@@ -954,10 +969,7 @@ export class ChatView extends ItemView {
 
 	/** Status dot on the info icon and the tab header (TAB-4), and the working indicator. */
 	private setStatus(status: Status): void {
-		// The working indicator takes space from the transcript; keep its end in view.
-		const pinned = this.isNearEnd();
 		this.contentEl.dataset.status = status;
-		if (pinned) this.scrollToEnd(true);
 		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.setAttr("data-apollo-status", status);
 		this.stopBtn.disabled = status === "idle" || status === "error";
 	}
@@ -972,8 +984,22 @@ export class ChatView extends ItemView {
 		return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL;
 	}
 
-	private scrollToEnd(force = false): void {
-		if (force || this.isNearEnd()) this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+	/** Shows the end of the transcript and keeps it in view as output arrives. */
+	private scrollToEnd(): void {
+		this.pinned = true;
+		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+	}
+
+	/**
+	 * Scrolling up unpins; reaching the end pins again. Content growing below
+	 * doesn't scroll, and content shrinking only moves the position to the end.
+	 */
+	private onScroll(): void {
+		const top = this.transcriptEl.scrollTop;
+		if (this.isNearEnd()) this.pinned = true;
+		else if (top < this.lastScrollTop) this.pinned = false;
+		this.lastScrollTop = top;
+		this.app.workspace.requestSaveLayout();
 	}
 }
 
