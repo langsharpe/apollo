@@ -1,6 +1,7 @@
 import { setIcon, setTooltip, type App } from "obsidian";
 import { createReferenceEl, linkifyPaths, resolve } from "./references";
 import { VAULT_TOOL_PREFIX } from "./vault-tools";
+import type { WorkSection } from "./work";
 
 /** What a tool call does, for a group's summary and progress line. */
 type Kind = "read" | "inspect" | "edit" | "move" | "trash" | "search" | "present" | "command" | "fetch" | "web" | "agent" | "other";
@@ -29,7 +30,7 @@ function vaultTool(name: string): (typeof VAULT_TOOLS)[string] | undefined {
 
 type CallState = "pending" | "done" | "error" | "stopped";
 
-interface Call {
+export interface Call {
 	kind: Kind;
 	state: CallState;
 	row: HTMLElement;
@@ -45,6 +46,83 @@ interface Call {
 
 const SUMMARY_LENGTH = 120;
 
+/** A row header that expands and collapses `el` (its `is-open` class) on click, Enter or Space. */
+export function createToggleHeader(el: HTMLElement): HTMLElement {
+	const header = el.createDiv({ cls: "apollo-activity-header", attr: { role: "button", tabindex: "0", "aria-expanded": "false" } });
+	setIcon(header.createSpan({ cls: "apollo-activity-chevron" }), "chevron-right");
+	const toggle = () => {
+		const open = !el.hasClass("is-open");
+		el.toggleClass("is-open", open);
+		header.setAttr("aria-expanded", String(open));
+	};
+	header.addEventListener("click", toggle);
+	header.addEventListener("keydown", (evt) => {
+		if (evt.key !== "Enter" && evt.key !== " ") return;
+		evt.preventDefault();
+		toggle();
+	});
+	return header;
+}
+
+/** Links to the files read and edited, one per file; an edit wins over a read. */
+export class FileLinks {
+	private readonly files = new Map<string, { el: HTMLElement; edited: boolean }>();
+
+	constructor(
+		private readonly el: HTMLElement,
+		private readonly app: App,
+		private readonly vaultPath: string,
+	) {}
+
+	add(path: string, edited: boolean): void {
+		const existing = this.files.get(path);
+		if (existing) {
+			if (edited && !existing.edited) {
+				existing.edited = true;
+				existing.el.addClass("is-edited");
+				setIcon(existing.el.querySelector<HTMLElement>(".apollo-ref-icon")!, "pencil");
+			}
+			return;
+		}
+		const name = path.split("/").pop() || path;
+		const ref = resolve(path, this.app, this.vaultPath);
+		let el: HTMLElement;
+		if (ref) {
+			el = createReferenceEl(this.el, "", ref);
+		} else {
+			// Outside the vault, or deleted since: shown, but not a link.
+			el = this.el.createSpan();
+			setTooltip(el, path);
+		}
+		el.addClass("apollo-activity-file");
+		if (edited) el.addClass("is-edited");
+		setIcon(el.createSpan({ cls: "apollo-ref-icon" }), edited ? "pencil" : "file-text");
+		el.appendText(name);
+		this.files.set(path, { el, edited });
+	}
+}
+
+/** A before/after summary of a move, trash or property edit (OBS-13), with its paths as links. */
+export function addChange(parent: HTMLElement, text: string, app: App, vaultPath: string): void {
+	linkifyPaths(parent.createDiv({ cls: "apollo-activity-change", text }), app, vaultPath);
+}
+
+/** "running", "error", "stopped" or "done", for a status dot. */
+export function callsState(calls: Call[]): string {
+	if (calls.some((c) => c.state === "pending")) return "running";
+	if (calls.some((c) => c.state === "error")) return "error";
+	return calls.some((c) => c.state === "stopped") ? "stopped" : "done";
+}
+
+/** "3 tools · 1 failed", or "" for none. */
+export function callsCount(calls: Call[]): string {
+	if (!calls.length) return "";
+	const counts = [`${calls.length} ${calls.length === 1 ? "tool" : "tools"}`];
+	const failed = calls.filter((c) => c.state === "error").length;
+	if (failed) counts.push(`${failed} failed`);
+	return counts.join(" · ");
+}
+
 /**
  * A run of consecutive tool calls, collapsed to one row (RND-2). The header
  * shows what is running now, or a summary once everything has finished.
@@ -53,42 +131,42 @@ const SUMMARY_LENGTH = 120;
  */
 export class ActivityGroup {
 	readonly el: HTMLElement;
-	private readonly headerEl: HTMLElement;
-	private readonly statusEl: HTMLElement;
 	private readonly labelEl: HTMLElement;
 	private readonly countEl: HTMLElement;
-	private readonly filesEl: HTMLElement;
+	private readonly files: FileLinks;
 	private readonly changesEl: HTMLElement;
 	private readonly callsEl: HTMLElement;
-	private readonly calls = new Map<string, Call>();
-	/** File links by path; `edited` wins over read when a file is both. */
-	private readonly files = new Map<string, { el: HTMLElement; edited: boolean }>();
+	private readonly callsById = new Map<string, Call>();
 
 	constructor(
 		parent: HTMLElement,
 		private readonly app: App,
 		private readonly vaultPath: string,
+		/** The section the group sits in, which shows its progress, files and changes while collapsed. */
+		private readonly section: WorkSection,
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity" });
-		this.headerEl = this.el.createDiv({ cls: "apollo-activity-header", attr: { role: "button", tabindex: "0", "aria-expanded": "false" } });
-		setIcon(this.headerEl.createSpan({ cls: "apollo-activity-chevron" }), "chevron-right");
-		this.statusEl = this.headerEl.createSpan({ cls: "apollo-activity-status" });
-		this.labelEl = this.headerEl.createSpan({ cls: "apollo-activity-label" });
-		this.countEl = this.headerEl.createSpan({ cls: "apollo-activity-count" });
-		this.filesEl = this.el.createDiv({ cls: "apollo-activity-files" });
+		const header = createToggleHeader(this.el);
+		header.createSpan({ cls: "apollo-activity-status" });
+		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
+		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
+		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
 		this.changesEl = this.el.createDiv({ cls: "apollo-activity-changes" });
 		this.callsEl = this.el.createDiv({ cls: "apollo-activity-calls" });
-		this.headerEl.addEventListener("click", () => this.toggle());
-		this.headerEl.addEventListener("keydown", (evt) => {
-			if (evt.key !== "Enter" && evt.key !== " ") return;
-			evt.preventDefault();
-			this.toggle();
-		});
+	}
+
+	get calls(): Call[] {
+		return [...this.callsById.values()];
 	}
 
 	get pending(): boolean {
-		for (const call of this.calls.values()) if (call.state === "pending") return true;
-		return false;
+		return this.calls.some((c) => c.state === "pending");
+	}
+
+	/** What the latest call still running is doing, or null when none is. */
+	get progress(): string | null {
+		const running = this.calls.filter((c) => c.state === "pending");
+		return running.length ? `${running[running.length - 1]!.progress}…` : null;
 	}
 
 	add(id: string, name: string, input: Record<string, unknown>): void {
@@ -111,20 +189,21 @@ export class ActivityGroup {
 			}
 		}
 		const progress = vault ? vaultProgress(name.slice(VAULT_TOOL_PREFIX.length), kind, input, this.vaultPath) : progressText(kind, name, input, this.vaultPath);
-		this.calls.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault });
+		this.callsById.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault });
 		if (path && (kind === "read" || kind === "inspect" || kind === "edit")) this.addFile(path, kind === "edit");
 		this.render();
 	}
 
 	/** Marks a call done or failed. `output` is the result's text. */
 	finish(id: string, isError: boolean, output = ""): void {
-		const call = this.calls.get(id);
+		const call = this.callsById.get(id);
 		if (!call || call.state !== "pending") return;
 		call.state = isError ? "error" : "done";
 		call.row.addClass(isError ? "is-error" : "is-done");
 		// Structural changes stay in view as a before/after summary (OBS-13).
 		if (call.changes && !isError && output && !output.startsWith("No changes")) {
-			linkifyPaths(this.changesEl.createDiv({ cls: "apollo-activity-change", text: output }), this.app, this.vaultPath);
+			addChange(this.changesEl, output, this.app, this.vaultPath);
+			this.section.addChange(output);
 		}
 		// Obsidian tools say why they failed in a sentence; show it with the call.
 		if (isError && output && call.vault) {
@@ -136,7 +215,7 @@ export class ActivityGroup {
 	/** Marks calls that will never get a result (the turn ended or was stopped) as stopped. */
 	settle(): void {
 		if (!this.pending) return;
-		for (const call of this.calls.values()) {
+		for (const call of this.callsById.values()) {
 			if (call.state !== "pending") continue;
 			call.state = "stopped";
 			call.row.addClass("is-stopped");
@@ -149,50 +228,18 @@ export class ActivityGroup {
 		return typeof value === "string" && value && resolve(value, this.app, this.vaultPath) ? value : null;
 	}
 
-	private toggle(): void {
-		const open = !this.el.hasClass("is-open");
-		this.el.toggleClass("is-open", open);
-		this.headerEl.setAttr("aria-expanded", String(open));
-	}
-
 	private addFile(path: string, edited: boolean): void {
-		const existing = this.files.get(path);
-		if (existing) {
-			if (edited && !existing.edited) {
-				existing.edited = true;
-				existing.el.addClass("is-edited");
-				setIcon(existing.el.querySelector<HTMLElement>(".apollo-ref-icon")!, "pencil");
-			}
-			return;
-		}
-		const name = path.split("/").pop() || path;
-		const ref = resolve(path, this.app, this.vaultPath);
-		let el: HTMLElement;
-		if (ref) {
-			el = createReferenceEl(this.filesEl, "", ref);
-		} else {
-			// Outside the vault, or deleted since: shown, but not a link.
-			el = this.filesEl.createSpan();
-			setTooltip(el, path);
-		}
-		el.addClass("apollo-activity-file");
-		if (edited) el.addClass("is-edited");
-		setIcon(el.createSpan({ cls: "apollo-ref-icon" }), edited ? "pencil" : "file-text");
-		el.appendText(name);
-		this.files.set(path, { el, edited });
+		this.files.add(path, edited);
+		this.section.addFile(path, edited);
 	}
 
 	private render(): void {
-		const calls = [...this.calls.values()];
-		const running = calls.filter((c) => c.state === "pending");
-		const failed = calls.filter((c) => c.state === "error").length;
-		const state = running.length ? "running" : failed ? "error" : calls.some((c) => c.state === "stopped") ? "stopped" : "done";
-		this.el.dataset.state = state;
+		const calls = this.calls;
+		this.el.dataset.state = callsState(calls);
 		// While running, the latest call still in progress; afterwards, what the group did.
-		this.labelEl.setText(running.length ? `${running[running.length - 1]!.progress}…` : summarise(calls));
-		const counts = [`${calls.length} ${calls.length === 1 ? "tool" : "tools"}`];
-		if (failed) counts.push(`${failed} failed`);
-		this.countEl.setText(counts.join(" · "));
+		this.labelEl.setText(this.progress ?? summarise(calls));
+		this.countEl.setText(callsCount(calls));
+		this.section.update();
 	}
 }
 
@@ -229,8 +276,8 @@ function filePath(input: Record<string, unknown>): string | null {
 	return typeof value === "string" && value ? value : null;
 }
 
-/** "Read 3 files, ran 2 commands": what a finished group did. */
-function summarise(calls: Call[]): string {
+/** "Read 3 files, ran 2 commands": what a finished group did, after "Thought" if it also thought. */
+export function summarise(calls: Call[], thought = false): string {
 	const count = (kind: Kind) => calls.filter((c) => c.kind === kind).length;
 	// File tools count distinct files, so reading a note twice is still one file.
 	const files = (kind: Kind) => new Set(calls.filter((c) => c.kind === kind).map((c, i) => c.path ?? i)).size;
@@ -249,6 +296,7 @@ function summarise(calls: Call[]): string {
 	add(count("web"), (n) => plural(n, "web search", "web searches"));
 	add(count("agent"), (n) => `ran ${plural(n, "agent", "agents")}`);
 	add(count("other"), (n) => `used ${plural(n, parts.length ? "other tool" : "tool", parts.length ? "other tools" : "tools")}`);
+	if (thought) parts.unshift("thought");
 	const text = parts.join(", ");
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }

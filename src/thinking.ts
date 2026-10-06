@@ -1,4 +1,4 @@
-import { setIcon } from "obsidian";
+import { createToggleHeader } from "./activity";
 
 /**
  * A block of Claude's thinking, as one collapsed row (RND-6). Claude Code
@@ -8,26 +8,22 @@ import { setIcon } from "obsidian";
  */
 export class ThinkingBlock {
 	readonly el: HTMLElement;
-	private readonly headerEl: HTMLElement;
 	private readonly labelEl: HTMLElement;
 	private readonly bodyEl: HTMLElement;
 	private text = "";
+	/** Still streaming; false once finished, including when removed for having no text. */
+	streaming = true;
 
 	constructor(
 		parent: HTMLElement,
 		private readonly render: (text: string, el: HTMLElement) => Promise<void>,
+		/** Called when the block finishes or is removed. */
+		private readonly onFinish: () => void,
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-thinking is-streaming" });
-		this.headerEl = this.el.createDiv({ cls: "apollo-activity-header", attr: { role: "button", tabindex: "0", "aria-expanded": "false" } });
-		setIcon(this.headerEl.createSpan({ cls: "apollo-activity-chevron" }), "chevron-right");
-		this.labelEl = this.headerEl.createSpan({ cls: "apollo-thinking-label", text: "Thinking…" });
+		const header = createToggleHeader(this.el);
+		this.labelEl = header.createSpan({ cls: "apollo-thinking-label", text: "Thinking…" });
 		this.bodyEl = this.el.createDiv({ cls: "apollo-thinking-body" });
-		this.headerEl.addEventListener("click", () => this.toggle());
-		this.headerEl.addEventListener("keydown", (evt) => {
-			if (evt.key !== "Enter" && evt.key !== " ") return;
-			evt.preventDefault();
-			this.toggle();
-		});
 	}
 
 	append(text: string): void {
@@ -37,19 +33,17 @@ export class ThinkingBlock {
 
 	/** Swaps the streamed text for Markdown. A block with no text (redacted, or display omitted) is removed. */
 	async finish(): Promise<void> {
+		if (!this.streaming) return;
+		this.streaming = false;
 		if (!this.text.trim()) {
 			this.el.remove();
+			this.onFinish();
 			return;
 		}
 		this.el.removeClass("is-streaming");
 		this.labelEl.setText("Thought");
 		this.bodyEl.empty();
+		this.onFinish();
 		await this.render(this.text, this.bodyEl);
-	}
-
-	private toggle(): void {
-		const open = !this.el.hasClass("is-open");
-		this.el.toggleClass("is-open", open);
-		this.headerEl.setAttr("aria-expanded", String(open));
 	}
 }

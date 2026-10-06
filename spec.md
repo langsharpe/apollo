@@ -176,6 +176,7 @@ Typing `/` at the start of the input opens a menu of everything invocable. It mu
 | RND-4 | Context usage meter from result usage data. |
 | RND-5 | Copy message as Markdown; *Save chat as note* (exports transcript into a configurable folder). |
 | RND-6 | Thinking shows as a collapsed row ("Thinking…", then "Thought"); expanding it shows Claude Code's thinking summary. Apollo asks for summaries (`--thinking-display summarized`) but leaves whether and how much Claude thinks to Claude Code's settings. |
+| RND-7 | A run of thinking and tool calls between messages collapses into one row: what is happening now while it runs, then a summary ("Thought, read 3 files, ran 1 command"). The files read or edited and any before/after summaries stay visible below it as links. Expanding it shows the thinking rows and activity groups, which expand in turn. A run of a single row shows just that row. |
 
 ### 4.10 Change awareness (nice to have)
 

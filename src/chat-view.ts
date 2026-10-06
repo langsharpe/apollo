@@ -1,6 +1,5 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { ActivityGroup } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";
@@ -11,7 +10,8 @@ import { Presenter } from "./presenter";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
-import { ThinkingBlock } from "./thinking";
+import type { ThinkingBlock } from "./thinking";
+import { WorkSection } from "./work";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
 
@@ -92,8 +92,8 @@ export class ChatView extends ItemView {
 	private toolResults = new Map<string, (isError: boolean, output: string) => void>();
 	/** Write calls that will create a note, by tool_use id, for auto-present (OBS-19). */
 	private newNotes = new Map<string, string>();
-	/** Tool call groups in the transcript; the last one takes further calls while nothing follows it. */
-	private activities: ActivityGroup[] = [];
+	/** Runs of thinking and tool calls in the transcript; the last one takes more while nothing follows it. */
+	private sections: WorkSection[] = [];
 
 	/** Opens notes for this chat: workspace_present and auto-present (OBS-14 to OBS-19). */
 	private readonly presenter: Presenter;
@@ -347,7 +347,7 @@ export class ChatView extends ItemView {
 		this.unidentified = [];
 		this.toolResults.clear();
 		this.newNotes.clear();
-		this.activities = [];
+		this.sections = [];
 		this.transcriptEl.empty();
 		this.pinned = true;
 		this.lastScrollTop = 0;
@@ -603,7 +603,7 @@ export class ChatView extends ItemView {
 						renders.push(this.renderMarkdown(block.text, el.createDiv()));
 						this.addForkAction(el, msg.uuid, "assistant");
 					} else if (block.type === "thinking" && block.thinking) {
-						const thinking = new ThinkingBlock(this.transcriptEl, (text, el) => this.renderMarkdown(text, el));
+						const thinking = this.workSection().thinking();
 						thinking.append(block.thinking);
 						renders.push(thinking.finish());
 					} else if (block.type === "tool_use" && block.id && block.name) {
@@ -644,12 +644,7 @@ export class ChatView extends ItemView {
 			return;
 		}
 		// Consecutive calls share a group; anything shown after it starts a new one.
-		let group = this.activities[this.activities.length - 1];
-		if (!group || group.el !== this.transcriptEl.lastElementChild) {
-			group = new ActivityGroup(this.transcriptEl, this.app, this.plugin.vaultPath());
-			this.activities.push(group);
-		}
-		const target = group;
+		const target = this.workSection().activity();
 		target.add(id, name, input);
 		this.toolResults.set(id, (isError, output) => {
 			target.finish(id, isError, output);
@@ -677,7 +672,16 @@ export class ChatView extends ItemView {
 	}
 
 	private settleActivities(): void {
-		for (const group of this.activities) group.settle();
+		for (const section of this.sections) section.settle();
+	}
+
+	/** The section for the next thinking block or tool call: the last one while nothing follows it, otherwise a new one. */
+	private workSection(): WorkSection {
+		const last = this.sections[this.sections.length - 1];
+		if (last && last.el === this.transcriptEl.lastElementChild) return last;
+		const section = new WorkSection(this.transcriptEl, this.app, this.plugin.vaultPath(), (text, el) => this.renderMarkdown(text, el));
+		this.sections.push(section);
+		return section;
 	}
 
 	/** A "Skill: name" row linking to its SKILL.md (SLS-8). */
@@ -881,7 +885,7 @@ export class ChatView extends ItemView {
 
 	private startThinking(): void {
 		this.finishBlock();
-		this.thinking = new ThinkingBlock(this.transcriptEl, (text, el) => this.renderMarkdown(text, el));
+		this.thinking = this.workSection().thinking();
 	}
 
 	// Swap the plain streamed text for rendered Markdown once the block completes.
