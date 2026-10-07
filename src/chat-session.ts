@@ -3,6 +3,7 @@ import { resolveShellEnv } from "./cli";
 import { buildOptions } from "./config";
 import type ApolloPlugin from "./main";
 import type { Presenter } from "./presenter";
+import { AgentTasks } from "./tasks";
 import { createVaultServer } from "./vault-tools";
 
 export interface ChatSessionHandlers {
@@ -24,8 +25,10 @@ export interface ChatSessionHandlers {
  */
 export class ChatSession {
 	sessionId: string | null = null;
-	/** True from send until the turn's result arrives. */
+	/** True from send, or from the start of a turn Claude Code begins itself, until the turn's result arrives. */
 	busy = false;
+	/** Subagents still running, which can outlast the turn that started them (RND-9). */
+	readonly tasks = new AgentTasks();
 
 	private query: Query | null = null;
 	private input: MessageQueue | null = null;
@@ -52,6 +55,11 @@ export class ChatSession {
 		return this.query !== null;
 	}
 
+	/** A turn is running, or a subagent is still at work after its turn ended. */
+	get working(): boolean {
+		return this.busy || this.tasks.size > 0;
+	}
+
 	/** Sends a message. Returns its UUID, which is also its ID in the transcript. */
 	async send(text: string): Promise<string> {
 		this.clearIdleTimer();
@@ -73,7 +81,7 @@ export class ChatSession {
 		return uuid;
 	}
 
-	/** Stops the current turn. The process stays up for the next message. */
+	/** Stops the current turn and any subagents still running. The process stays up for the next message. */
 	async interrupt(): Promise<void> {
 		await this.query?.interrupt();
 	}
@@ -140,16 +148,20 @@ export class ChatSession {
 		let error: unknown = null;
 		try {
 			for await (const msg of q) {
+				const wasWorking = this.working;
 				if (msg.type === "system" && msg.subtype === "init") {
 					this.sessionId = msg.session_id;
+					// Every turn starts with init, including one Claude Code begins when a background agent reports back.
+					this.busy = true;
 					void this.reportCommands(q, msg.skills, msg.terminal_slash_commands ?? []);
 				}
 				// Skills found mid-session (SLS-5).
 				if (msg.type === "system" && msg.subtype === "commands_changed") this.plugin.catalogue.reconcile({ commands: msg.commands });
-				if (msg.type === "result") {
-					this.busy = false;
-					this.startIdleTimer();
-				}
+				if (msg.type === "result") this.busy = false;
+				this.tasks.ingest(msg);
+				// The idle timeout runs only once the turn and its background agents are all done.
+				if (wasWorking && !this.working) this.startIdleTimer();
+				else if (!wasWorking && this.working) this.clearIdleTimer();
 				this.handlers.message(msg);
 			}
 		} catch (err) {
@@ -186,7 +198,7 @@ export class ChatSession {
 		if (!(minutes > 0)) return;
 		this.idleTimer = window.setTimeout(() => {
 			this.idleTimer = null;
-			if (this.busy || !this.query) return;
+			if (this.working || !this.query) return;
 			this.close();
 			this.handlers.released();
 		}, minutes * 60_000);
@@ -204,6 +216,7 @@ export class ChatSession {
 		this.input = null;
 		this.abort = null;
 		this.busy = false;
+		this.tasks.clear();
 	}
 }
 

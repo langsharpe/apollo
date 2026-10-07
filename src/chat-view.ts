@@ -1,5 +1,6 @@
-import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { agentTotals, filePath, formatDuration, toolKind, type ActivityGroup, type Step } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";
@@ -7,6 +8,7 @@ import type ApolloPlugin from "./main";
 import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
+import { ProgressLine } from "./progress";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
@@ -45,6 +47,9 @@ interface ViewInternals {
 	titleEl?: HTMLElement;
 }
 
+/** What an Agent call returns when the agent goes to the background. */
+const BACKGROUND_AGENT = "Async agent launched";
+
 const NEW_CHAT_TITLE = "New chat";
 const TITLE_LENGTH = 50;
 
@@ -67,6 +72,9 @@ export class ChatView extends ItemView {
 	private queued: { text: string; el: HTMLElement }[] = [];
 	private pendingCards = 0;
 	private stopping = false;
+	private status: Status = "idle";
+	/** The chat finished while you were looking elsewhere; its tab shows a dot until you look. */
+	private unseen = false;
 	/** New output keeps the end of the transcript in view. Only the user's own scrolling clears it. */
 	private pinned = true;
 	/** scrollTop at the last scroll event, to tell scrolling up from content growing. */
@@ -76,14 +84,17 @@ export class ChatView extends ItemView {
 	private modelEl!: HTMLSelectElement;
 	private effortEl!: HTMLSelectElement;
 	private modeEl!: HTMLSelectElement;
+	/** Scrolls the transcript and the status row after it. */
+	private scrollEl!: HTMLElement;
 	private transcriptEl!: HTMLElement;
-	private workingLabelEl!: HTMLElement;
+	private progress!: ProgressLine;
 	private input!: ChatInput;
 	private stopBtn!: HTMLButtonElement;
 
 	// Streaming state for the current text block.
 	private blockEl: HTMLElement | null = null;
 	private blockText = "";
+	private blockStarted = 0;
 	/** The thinking block streaming now, if any. */
 	private thinking: ThinkingBlock | null = null;
 	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
@@ -94,6 +105,8 @@ export class ChatView extends ItemView {
 	private newNotes = new Map<string, string>();
 	/** Runs of thinking and tool calls in the transcript; the last one takes more while nothing follows it. */
 	private sections: WorkSection[] = [];
+	/** The group holding each Agent call, by tool_use id, for the agent's progress and edits (RND-9). */
+	private agentCalls = new Map<string, ActivityGroup>();
 
 	/** Opens notes for this chat: workspace_present and auto-present (OBS-14 to OBS-19). */
 	private readonly presenter: Presenter;
@@ -128,15 +141,22 @@ export class ChatView extends ItemView {
 		root.empty();
 		root.addClass("apollo-chat");
 
-		this.transcriptEl = root.createDiv({ cls: "apollo-transcript" });
-		this.registerDomEvent(this.transcriptEl, "scroll", () => this.onScroll());
+		this.scrollEl = root.createDiv({ cls: "apollo-scroll" });
+		this.transcriptEl = this.scrollEl.createDiv({ cls: "apollo-transcript" });
+		// Shown at the end of the transcript from send until the turn and its agents end, including while a process starts (RND-8).
+		this.progress = new ProgressLine(this.scrollEl, this, {
+			step: () => this.currentStep(),
+			tasks: () => this.session.tasks.list,
+			awaiting: () => this.pendingCards > 0,
+		});
+		this.registerDomEvent(this.scrollEl, "scroll", () => this.onScroll());
 		// Output often grows after it's added (Markdown rendering, tool results), so follow every change while pinned.
 		const follow = () => this.pinned && this.scrollToEnd();
 		const mutations = new MutationObserver(follow);
-		mutations.observe(this.transcriptEl, { childList: true, subtree: true, characterData: true });
-		// The working indicator, the input growing and pane resizes all shrink the transcript.
+		mutations.observe(this.scrollEl, { childList: true, subtree: true, characterData: true });
+		// The input growing and pane resizes shrink the transcript.
 		const resizes = new ResizeObserver(follow);
-		resizes.observe(this.transcriptEl);
+		resizes.observe(this.scrollEl);
 		this.register(() => {
 			mutations.disconnect();
 			resizes.disconnect();
@@ -145,16 +165,12 @@ export class ChatView extends ItemView {
 		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
 		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
 
-		// Shown from send until the turn ends, including while a process starts.
-		const working = root.createDiv({ cls: "apollo-working" });
-		working.createDiv({ cls: "apollo-working-spinner" });
-		this.workingLabelEl = working.createSpan();
 
 		const form = root.createDiv({ cls: "apollo-input" });
 		this.input = new ChatInput(form, this.plugin, this, {
 			submit: () => this.submit(),
 			escape: () => {
-				if (!this.session.busy) return false;
+				if (!this.session.working) return false;
 				this.stop();
 				return true;
 			},
@@ -195,6 +211,9 @@ export class ChatView extends ItemView {
 		if (titleEl) this.registerDomEvent(titleEl, "dblclick", () => this.editTitle(titleEl));
 		// Renames, from here or the chat list, and Claude Code's own titles.
 		this.registerEvent(this.plugin.store.onChanged(() => void this.refreshTitle()));
+		// Looking at the chat clears its "finished while you were away" dot.
+		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.markSeen()));
+		this.registerDomEvent(this.containerEl.win, "focus", () => this.markSeen());
 
 		this.reset(null);
 		const { claudePath } = await resolveShellEnv();
@@ -211,7 +230,7 @@ export class ChatView extends ItemView {
 			sessionId: this.sessionId,
 			title: this.title,
 			draft: this.input?.value ?? "",
-			scroll: this.transcriptEl && !this.pinned ? this.transcriptEl.scrollTop : null,
+			scroll: this.scrollEl && !this.pinned ? this.scrollEl.scrollTop : null,
 			mode: this.mode,
 			model: this.session?.model ?? null,
 			effort: this.session?.effort ?? null,
@@ -303,7 +322,7 @@ export class ChatView extends ItemView {
 		if (session !== this.session) return;
 		if (scroll == null) this.scrollToEnd();
 		else {
-			this.transcriptEl.scrollTop = scroll;
+			this.scrollEl.scrollTop = scroll;
 			this.pinned = this.isNearEnd();
 		}
 		void this.refreshTitle();
@@ -348,6 +367,8 @@ export class ChatView extends ItemView {
 		this.toolResults.clear();
 		this.newNotes.clear();
 		this.sections = [];
+		this.agentCalls.clear();
+		this.progress.idle();
 		this.transcriptEl.empty();
 		this.pinned = true;
 		this.lastScrollTop = 0;
@@ -355,6 +376,7 @@ export class ChatView extends ItemView {
 		this.setTitle(title || NEW_CHAT_TITLE);
 		this.updateInfo();
 		this.setStatus("idle");
+		this.setUnseen(false);
 		// The chat list shows which sessions are open.
 		this.plugin.store.changed();
 	}
@@ -380,9 +402,9 @@ export class ChatView extends ItemView {
 	private async send(text: string, bubbles: HTMLElement[]): Promise<void> {
 		this.stopping = false;
 		this.presenter.newTurn();
-		this.setStatus("running");
 		// The first message, and the first after a resume or idle release, waits for a process.
-		this.setWorking(this.session.running ? "Working…" : "Starting Claude Code…");
+		this.progress.begin(this.session.running ? null : "starting");
+		this.refreshStatus();
 		// Until Claude Code names the session, the first prompt is the title.
 		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(summarise(text));
 		try {
@@ -394,11 +416,11 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	/** Stops the current turn (PRM-T4). Queued messages go back to the input. */
+	/** Stops the current turn and any agents still running (PRM-T4). Queued messages go back to the input. */
 	stop(): void {
-		if (!this.session.busy) return;
+		if (!this.session.working) return;
 		this.stopping = true;
-		this.setWorking("Stopping…");
+		this.progress.setPhase("stopping");
 		this.returnQueuedToInput();
 		void this.session.interrupt().catch((err) => console.error("Apollo: interrupt failed", err));
 	}
@@ -413,7 +435,7 @@ export class ChatView extends ItemView {
 	private async onPermissionRequest(...[toolName, input, options]: Parameters<CanUseTool>): Promise<PermissionResult> {
 		this.finishBlock();
 		this.pendingCards++;
-		this.setStatus("awaiting");
+		this.refreshStatus();
 		try {
 			const decision = showPermissionCard(
 				this.transcriptEl,
@@ -430,7 +452,9 @@ export class ChatView extends ItemView {
 			return result;
 		} finally {
 			this.pendingCards = Math.max(0, this.pendingCards - 1);
-			if (this.session.busy) this.setStatus(this.pendingCards ? "awaiting" : "running");
+			// Time spent waiting for you isn't Claude going quiet.
+			this.progress.heartbeat();
+			this.refreshStatus();
 		}
 	}
 
@@ -488,21 +512,31 @@ export class ChatView extends ItemView {
 
 	private onEnded(err: unknown): void {
 		this.finishBlock();
-		this.settleActivities();
+		// Background agents went with the process.
+		this.settleActivities(true);
 		console.error("Apollo: Claude Code ended", err);
 		this.note(`Error: ${err instanceof Error ? err.message : String(err)}`, "apollo-error");
 		this.returnQueuedToInput();
+		this.stopping = false;
+		this.progress.idle();
 		this.setStatus("error");
 		this.updateInfo();
 	}
 
 	private handle(msg: SDKMessage): void {
-		// Subagent output streams too; only the main thread is shown.
-		if ("parent_tool_use_id" in msg && msg.parent_tool_use_id) return;
+		// Anything from Claude Code, from the main thread or a subagent, shows it's alive (RND-8).
+		this.progress.heartbeat();
+		if ("parent_tool_use_id" in msg && msg.parent_tool_use_id) {
+			// Subagent output isn't shown; the files it edits are listed with its call (RND-9).
+			if (msg.type === "assistant") this.agentEdits(msg.parent_tool_use_id, msg.message.content);
+			return;
+		}
 		switch (msg.type) {
 			case "system":
 				if (msg.subtype === "init") {
-					if (!this.stopping) this.setWorking("Working…");
+					// Claude Code starts a turn itself when a background agent reports back.
+					if (this.progress.inTurn) this.progress.setPhase(null);
+					else this.progress.begin();
 					this.model = msg.model;
 					this.outputStyle = msg.output_style;
 					this.updateInfo();
@@ -510,21 +544,34 @@ export class ChatView extends ItemView {
 					// A new session now has an ID to save and list.
 					this.app.workspace.requestSaveLayout();
 					this.plugin.store.changed();
-				} else if (msg.subtype === "status" && msg.permissionMode) {
-					this.syncMode(msg.permissionMode);
+				} else if (msg.subtype === "status") {
+					if (msg.permissionMode) this.syncMode(msg.permissionMode);
+					this.progress.setPhase(msg.status === "compacting" ? "compacting" : null);
+				} else if (msg.subtype === "api_retry") {
+					this.progress.setRetry(msg);
+				} else if (msg.subtype === "task_progress" && msg.tool_use_id) {
+					const task = this.session.tasks.byToolUse(msg.tool_use_id);
+					this.agentCalls.get(msg.tool_use_id)?.agentProgress(msg.tool_use_id, msg.summary || msg.description, msg.usage.tool_uses, task?.description ?? "");
+				} else if (msg.subtype === "task_notification" && msg.tool_use_id) {
+					this.agentEnded(msg.tool_use_id, msg.status, msg.usage ? agentTotals(msg.usage.tool_uses, msg.usage.duration_ms) : "");
 				} else if (msg.subtype === "permission_denied") {
 					const who = msg.decision_reason_type === "classifier" ? "Auto mode" : "Claude Code";
 					this.note(`${who} denied ${msg.tool_name}${msg.decision_reason ? `: ${msg.decision_reason}` : ""}`);
 				}
+				// Agents starting and ending change whether the chat is working.
+				this.refreshStatus();
 				break;
 			case "stream_event": {
 				const ev = msg.event;
+				this.progress.setRetry(null);
 				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.startBlock();
 				else if (ev.type === "content_block_start" && ev.content_block.type === "thinking") this.startThinking();
 				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.appendBlock(ev.delta.text);
 				else if (ev.type === "content_block_delta" && ev.delta.type === "thinking_delta") this.thinking?.append(ev.delta.thinking);
 				else if (ev.type === "content_block_stop") this.finishBlock();
-				break;
+				// Deltas don't change the step; the line's own timer keeps its times current.
+				if (ev.type === "content_block_start" || ev.type === "content_block_stop") this.progress.refresh();
+				return;
 			}
 			case "assistant":
 				// Text arrives through stream events; tool calls are shown once their input is complete.
@@ -540,7 +587,8 @@ export class ChatView extends ItemView {
 			case "user":
 				if (Array.isArray(msg.message.content)) {
 					for (const block of msg.message.content) {
-						if (block.type === "tool_result") this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
+						if (block.type !== "tool_result") continue;
+						this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
 					}
 				}
 				break;
@@ -548,15 +596,53 @@ export class ChatView extends ItemView {
 				this.onTurnEnd(msg.subtype, msg.duration_ms);
 				break;
 		}
+		this.progress.refresh();
+	}
+
+	/** Files a subagent edits, listed under its Agent call (RND-9). */
+	private agentEdits(parentId: string, content: SDKAssistantMessage["message"]["content"]): void {
+		const group = this.agentCalls.get(parentId);
+		if (!group) return;
+		for (const block of content) {
+			if (block.type !== "tool_use" || toolKind(block.name) !== "edit") continue;
+			const path = filePath(block.input as Record<string, unknown>);
+			if (path) group.addAgentEdit(path);
+		}
+	}
+
+	/** An agent finished, failed or was stopped: its call shows how, with its totals (RND-9). */
+	private agentEnded(toolUseId: string, status: string, totals: string): void {
+		this.agentCalls.get(toolUseId)?.endAgent(toolUseId, status === "completed" ? "done" : status === "failed" ? "error" : "stopped", totals);
+		// Stop with only background agents running ends without a result.
+		if (this.stopping && !this.progress.inTurn && !this.session.working) {
+			this.stopping = false;
+			this.note("Stopped.");
+		}
+	}
+
+	/** What the turn is waiting on: a reply streaming in, or the latest thinking or tool call (RND-8). */
+	private currentStep(): Step | null {
+		if (this.blockEl) return { label: "Writing a reply", since: this.blockStarted, kind: "text" };
+		for (const section of [...this.sections].reverse()) {
+			const step = section.current();
+			if (step) return step;
+		}
+		return null;
 	}
 
 	private onTurnEnd(subtype: string, durationMs: number): void {
 		this.finishBlock();
 		this.settleActivities();
 		this.unidentified = [];
-		const secs = (durationMs / 1000).toFixed(1);
+		this.progress.end();
+		const time = durationMs < 60_000 ? `${(durationMs / 1000).toFixed(1)}s` : formatDuration(durationMs);
+		const agents = this.session.tasks.size;
 		if (this.stopping) this.note("Stopped.");
-		else this.note(`${subtype === "success" ? "Done" : `Ended (${subtype})`} in ${secs}s`);
+		else {
+			const outcome = `${subtype === "success" ? "Done" : `Ended (${subtype})`} in ${time}`;
+			// Agents the turn started in the background carry on; Claude picks up when they report back (RND-9).
+			this.note(agents ? `${outcome}. ${agents === 1 ? "An agent is" : `${agents} agents are`} still working.` : outcome);
+		}
 		this.stopping = false;
 		// The chat list's "last updated", and Claude Code's generated title.
 		this.plugin.store.changed();
@@ -572,7 +658,7 @@ export class ChatView extends ItemView {
 			this.queued = [];
 			void this.send(text, bubbles);
 		} else {
-			this.setStatus("idle");
+			this.refreshStatus();
 		}
 	}
 
@@ -590,7 +676,14 @@ export class ChatView extends ItemView {
 					else if (block.type === "text" && block.text) texts.push(block.text);
 					else if (block.type === "image") texts.push("[Image]");
 				}
-				const prompt = displayPrompt(texts.join("\n\n"));
+				const text = texts.join("\n\n");
+				// A background agent reporting back (RND-9).
+				const report = taskNotification(text);
+				if (report) {
+					this.agentEnded(report.toolUseId, report.status, report.totals);
+					continue;
+				}
+				const prompt = displayPrompt(text);
 				if (prompt === INTERRUPTED) this.note("Stopped.");
 				else if (prompt) {
 					this.addForkAction(this.userBubble(prompt), msg.uuid, "user");
@@ -612,8 +705,8 @@ export class ChatView extends ItemView {
 				}
 			}
 		}
-		// Calls cut off by an interrupted turn never got a result.
-		this.settleActivities();
+		// Calls cut off by an interrupted turn never got a result, and agents that never reported back aren't running now.
+		this.settleActivities(true);
 		await Promise.all(renders);
 	}
 
@@ -646,7 +739,14 @@ export class ChatView extends ItemView {
 		// Consecutive calls share a group; anything shown after it starts a new one.
 		const target = this.workSection().activity();
 		target.add(id, name, input);
+		const agent = toolKind(name) === "agent";
+		if (agent) this.agentCalls.set(id, target);
 		this.toolResults.set(id, (isError, output) => {
+			// A background agent's call returns at once; its row runs until the agent ends (RND-9).
+			if (agent && !isError && (this.session.tasks.byToolUse(id)?.background || output.startsWith(BACKGROUND_AGENT))) {
+				target.background(id);
+				return;
+			}
 			target.finish(id, isError, output);
 			const created = this.newNotes.get(id);
 			this.newNotes.delete(id);
@@ -671,8 +771,9 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	private settleActivities(): void {
-		for (const section of this.sections) section.settle();
+	/** Marks calls that will never get a result as stopped. Background agents carry on unless `all`. */
+	private settleActivities(all = false): void {
+		for (const section of this.sections) section.settle(all);
 	}
 
 	/** The section for the next thinking block or tool call: the last one while nothing follows it, otherwise a new one. */
@@ -874,6 +975,7 @@ export class ChatView extends ItemView {
 		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant is-streaming" });
 		this.blockEl = el.createDiv();
 		this.blockText = "";
+		this.blockStarted = Date.now();
 		this.unidentified.push(el);
 	}
 
@@ -971,27 +1073,52 @@ export class ChatView extends ItemView {
 		void navigator.clipboard.writeText(id).then(() => new Notice("Session ID copied."));
 	}
 
-	/** Status dot on the info icon and the tab header (TAB-4), and the working indicator. */
+	/**
+	 * Running while a turn or an agent is working, awaiting while a card
+	 * needs an answer, otherwise idle. An error stays until the next send.
+	 */
+	private refreshStatus(): void {
+		if (this.pendingCards) this.setStatus("awaiting");
+		else if (this.progress.inTurn || this.session.working) this.setStatus("running");
+		else if (this.status !== "error") this.setStatus("idle");
+	}
+
+	/** Status dot on the info icon and the tab header (TAB-4), and the progress line (RND-8). */
 	private setStatus(status: Status): void {
+		const was = this.status;
+		this.status = status;
 		this.contentEl.dataset.status = status;
 		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.setAttr("data-apollo-status", status);
 		this.stopBtn.disabled = status === "idle" || status === "error";
+		if (status === "idle" || status === "error") this.progress.idle();
+		// Finished while you were looking elsewhere: the tab keeps a dot until you look.
+		if (status === "running") this.setUnseen(false);
+		else if (status === "idle" && (was === "running" || was === "awaiting") && !this.isSeen()) this.setUnseen(true);
 	}
 
-	/** The working indicator's text. It shows while the status is running. */
-	private setWorking(label: string): void {
-		this.workingLabelEl.setText(label);
+	/** The chat is on screen in the focused window. */
+	private isSeen(): boolean {
+		return this.containerEl.doc.hasFocus() && this.containerEl.isShown();
+	}
+
+	private markSeen(): void {
+		if (this.unseen && this.isSeen()) this.setUnseen(false);
+	}
+
+	private setUnseen(unseen: boolean): void {
+		this.unseen = unseen;
+		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.toggleAttribute("data-apollo-unseen", unseen);
 	}
 
 	private isNearEnd(): boolean {
-		const el = this.transcriptEl;
+		const el = this.scrollEl;
 		return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL;
 	}
 
 	/** Shows the end of the transcript and keeps it in view as output arrives. */
 	private scrollToEnd(): void {
 		this.pinned = true;
-		this.transcriptEl.scrollTop = this.transcriptEl.scrollHeight;
+		this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
 	}
 
 	/**
@@ -999,7 +1126,7 @@ export class ChatView extends ItemView {
 	 * doesn't scroll, and content shrinking only moves the position to the end.
 	 */
 	private onScroll(): void {
-		const top = this.transcriptEl.scrollTop;
+		const top = this.scrollEl.scrollTop;
 		if (this.isNearEnd()) this.pinned = true;
 		else if (top < this.lastScrollTop) this.pinned = false;
 		this.lastScrollTop = top;
@@ -1046,8 +1173,15 @@ function displayPrompt(text: string): string {
 		const name = command[1]!.trim();
 		return `${name.startsWith("/") ? name : `/${name}`}${args ? ` ${args}` : ""}`;
 	}
-	if (/^<(local-command-\w+|command-message|bash-\w+)>/.test(stripped) || stripped.startsWith("Caveat: The messages below")) return "";
+	if (/^<(local-command-\w+|command-message|bash-\w+|task-notification)>/.test(stripped) || stripped.startsWith("Caveat: The messages below")) return "";
 	return stripped;
+}
+
+/** A background task's report, which Claude Code stores as a user entry; null for anything else. */
+function taskNotification(text: string): { toolUseId: string; status: string; totals: string } | null {
+	if (!text.trimStart().startsWith("<task-notification>")) return null;
+	const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(text)?.[1]?.trim() ?? "";
+	return { toolUseId: tag("tool-use-id"), status: tag("status"), totals: agentTotals(Number(tag("tool_uses")) || 0, Number(tag("duration_ms")) || 0) };
 }
 
 /** A transcript user message's prompt text, or "" if it isn't a prompt. */

@@ -1,18 +1,18 @@
 import { createToggleHeader } from "./activity";
 
 /**
- * A block of Claude's thinking, as one collapsed row (RND-6). Claude Code
- * sends a summary rather than the raw thinking. It streams in as plain text
- * and renders as Markdown once the block ends; it shows when the row is
- * expanded.
+ * A block of Claude's thinking, as one collapsed "Thought" row (RND-6).
+ * Claude Code sends a summary rather than the raw thinking. It streams in as
+ * plain text and renders as Markdown once the block ends; it shows when the
+ * row is expanded. The status row says "Thinking" while it streams (RND-8).
  */
 export class ThinkingBlock {
 	readonly el: HTMLElement;
-	private readonly labelEl: HTMLElement;
 	private readonly bodyEl: HTMLElement;
 	private text = "";
 	/** Still streaming; false once finished, including when removed for having no text. */
 	streaming = true;
+	readonly started = Date.now();
 
 	constructor(
 		parent: HTMLElement,
@@ -22,7 +22,7 @@ export class ThinkingBlock {
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-thinking is-streaming" });
 		const header = createToggleHeader(this.el);
-		this.labelEl = header.createSpan({ cls: "apollo-thinking-label", text: "Thinking…" });
+		header.createSpan({ cls: "apollo-thinking-label", text: "Thought" });
 		this.bodyEl = this.el.createDiv({ cls: "apollo-thinking-body" });
 	}
 
@@ -41,7 +41,6 @@ export class ThinkingBlock {
 			return;
 		}
 		this.el.removeClass("is-streaming");
-		this.labelEl.setText("Thought");
 		this.bodyEl.empty();
 		this.onFinish();
 		await this.render(this.text, this.bodyEl);

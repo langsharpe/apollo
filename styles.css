@@ -4,13 +4,26 @@
 	gap: var(--size-4-2);
 }
 
-.apollo-transcript {
+/* Scrolls the transcript and the status row at its end (RND-8). */
+.apollo-scroll {
 	flex: 1;
 	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
 	gap: var(--size-4-2);
+}
+
+.apollo-transcript {
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
 	user-select: text;
+}
+
+/* The placeholder sits in the middle; otherwise the status row follows the last message. */
+.apollo-transcript:has(> .apollo-empty) {
+	flex-grow: 1;
 }
 
 .apollo-empty {
@@ -108,40 +121,38 @@
 	transform: rotate(90deg);
 }
 
-.apollo-activity-status {
-	flex-shrink: 0;
-	width: 8px;
-	height: 8px;
-	border-radius: 50%;
-	background: var(--color-green);
-}
-
-.apollo-activity[data-state="running"] > .apollo-activity-header .apollo-activity-status {
-	background: none;
-	border: 1.5px solid var(--background-modifier-border);
-	border-top-color: var(--text-accent);
-	animation: apollo-spin 0.8s linear infinite;
-}
-
-.apollo-activity[data-state="error"] > .apollo-activity-header .apollo-activity-status {
-	background: var(--color-red);
-}
-
-.apollo-activity[data-state="stopped"] > .apollo-activity-header .apollo-activity-status {
-	background: none;
-	border: 1.5px solid var(--text-faint);
-}
-
+/*
+ * The status row at the end of the transcript (RND-8): the current step, a
+ * warning when Claude goes quiet, the turn's elapsed time, and a row per
+ * running agent (RND-9). It fades in after a second, so quick turns don't
+ * flash it. Stalls change the colour and stop the spinner rather than adding
+ * motion.
+ */
 .apollo-working {
 	display: none;
-	align-items: center;
-	gap: var(--size-4-2);
+	flex-direction: column;
+	gap: var(--size-2-1);
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
+	animation: apollo-appear 150ms ease-out 1s backwards;
 }
 
-.apollo-chat[data-status="running"] .apollo-working {
+.apollo-chat[data-status="running"] .apollo-working,
+.apollo-chat[data-status="awaiting"] .apollo-working {
 	display: flex;
+}
+
+@keyframes apollo-appear {
+	from {
+		opacity: 0;
+	}
+}
+
+.apollo-working-main {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
 }
 
 .apollo-working-spinner {
@@ -154,6 +165,97 @@
 	animation: apollo-spin 0.8s linear infinite;
 }
 
+.apollo-working:not([data-state="ok"]) .apollo-working-spinner {
+	animation: none;
+	border-color: currentColor;
+}
+
+.apollo-working[data-state="awaiting"] .apollo-working-main {
+	color: var(--color-orange);
+}
+
+.apollo-working[data-state="warning"] .apollo-working-main {
+	color: var(--color-yellow);
+}
+
+.apollo-working-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-working-warning:not(:empty)::before {
+	content: "· ";
+}
+
+.apollo-working-warning {
+	flex-shrink: 0;
+}
+
+.apollo-working-elapsed {
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.apollo-working-agents {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+}
+
+.apollo-working-agents:empty {
+	display: none;
+}
+
+.apollo-working-agent {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+	padding-left: calc(10px + var(--size-4-2));
+}
+
+.apollo-working-agent-icon {
+	display: flex;
+	flex-shrink: 0;
+	color: var(--text-faint);
+	--icon-size: var(--icon-xs);
+}
+
+.apollo-working-agent-name {
+	flex-shrink: 0;
+	max-width: 50%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-normal);
+}
+
+.apollo-working-agent-activity {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-working-agent-meta {
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.apollo-working-agent.is-quiet .apollo-working-agent-meta {
+	color: var(--color-yellow);
+}
+
+.apollo-working-agent.is-more {
+	color: var(--text-faint);
+}
+
 @keyframes apollo-spin {
 	to {
 		transform: rotate(360deg);
@@ -161,7 +263,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.apollo-activity[data-state="running"] > .apollo-activity-header .apollo-activity-status,
+	.apollo-working,
 	.apollo-working-spinner {
 		animation: none;
 	}
@@ -175,10 +277,6 @@
 	white-space: nowrap;
 }
 
-.apollo-activity[data-state="running"] > .apollo-activity-header .apollo-activity-label {
-	color: var(--text-normal);
-}
-
 .apollo-activity-count {
 	flex-shrink: 0;
 	color: var(--text-faint);
@@ -189,7 +287,7 @@
 	display: flex;
 	flex-wrap: wrap;
 	gap: var(--size-2-1) var(--size-4-2);
-	padding-left: calc(var(--icon-xs) + 8px + 2 * var(--size-4-1));
+	padding-left: calc(var(--icon-xs) + var(--size-4-1));
 }
 
 .apollo-activity-files:empty {
@@ -216,7 +314,7 @@
 	flex-direction: column;
 	gap: var(--size-2-1);
 	margin-left: calc(var(--icon-xs) / 2 - 1px);
-	padding-left: calc(var(--icon-xs) / 2 + 8px + 2 * var(--size-4-1) - 1px);
+	padding-left: calc(var(--icon-xs) / 2 + var(--size-4-1) - 1px);
 	border-left: 1px solid var(--background-modifier-border);
 }
 
@@ -236,10 +334,6 @@
 
 .apollo-thinking.is-open .apollo-activity-chevron {
 	transform: rotate(90deg);
-}
-
-.apollo-thinking.is-streaming .apollo-thinking-label {
-	color: var(--text-normal);
 }
 
 .apollo-thinking-body {
@@ -307,24 +401,18 @@
 	min-width: 0;
 }
 
+/* A failed call gets a red dot; nothing else is marked. Failures are often routine, so the summary rows don't show them. */
 .apollo-tool::before {
-	content: "○";
-	color: var(--text-faint);
-}
-
-.apollo-tool.is-done::before {
-	content: "●";
-	color: var(--color-green);
+	content: "";
+	flex-shrink: 0;
+	align-self: center;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
 }
 
 .apollo-tool.is-error::before {
-	content: "●";
-	color: var(--color-red);
-}
-
-.apollo-tool.is-stopped::before {
-	content: "○";
-	color: var(--text-faint);
+	background: var(--color-red);
 }
 
 .apollo-tool-name {
@@ -337,6 +425,16 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* An agent's latest step while it runs, then its totals (RND-9). */
+.apollo-tool-detail {
+	flex-shrink: 0;
+	max-width: 50%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-faint);
 }
 
 /* Why an Obsidian tool call failed, under its row. */
@@ -355,7 +453,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: var(--size-2-1);
-	padding-left: calc(var(--icon-xs) + 8px + 2 * var(--size-4-1));
+	padding-left: calc(var(--icon-xs) + var(--size-4-1));
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 }
@@ -786,6 +884,11 @@ code.apollo-ref {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
+}
+
+/* Finished while you were looking elsewhere; cleared when you look (RND-8). */
+.workspace-tab-header[data-apollo-status="idle"][data-apollo-unseen] .workspace-tab-header-inner-icon::after {
+	background: var(--interactive-accent);
 }
 
 .workspace-tab-header[data-apollo-status="running"] .workspace-tab-header-inner-icon::after {

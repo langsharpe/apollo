@@ -1,12 +1,12 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, callsCount, callsState, createToggleHeader, FileLinks, summarise } from "./activity";
+import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, summarise, type Step } from "./activity";
 import { ThinkingBlock } from "./thinking";
 
 /**
  * A run of thinking and tool calls between messages, collapsed to one row
- * (RND-7). The header shows what is happening now, or a summary once it's
- * done; the files read and edited and any structural changes stay visible
- * below it as links. Expanding it shows the thinking rows and activity
+ * (RND-7). The header summarises what it did so far; what is happening now
+ * shows in the status row at the end of the transcript (RND-8). The files
+ * read and edited and any structural changes stay visible below it as links. Expanding it shows the thinking rows and activity
  * groups, which expand in turn. A run of one row shows just that row.
  */
 export class WorkSection {
@@ -27,7 +27,6 @@ export class WorkSection {
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity apollo-work" });
 		const header = createToggleHeader(this.el);
-		header.createSpan({ cls: "apollo-activity-status" });
 		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
 		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
 		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
@@ -51,9 +50,20 @@ export class WorkSection {
 		return block;
 	}
 
-	/** Marks calls that will never get a result as stopped. */
-	settle(): void {
-		for (const group of this.groups) group.settle();
+	/** What the turn is waiting on in this section: thinking, or the latest call still running (RND-8). */
+	current(): Step | null {
+		const thinking = this.thoughts.find((t) => t.streaming && t.el === this.bodyEl.lastElementChild);
+		if (thinking) return { label: "Thinking", since: thinking.started, kind: "thinking" };
+		for (const group of [...this.groups].reverse()) {
+			const step = group.current();
+			if (step) return step;
+		}
+		return null;
+	}
+
+	/** Marks calls that will never get a result as stopped. Background agents carry on unless `all`. */
+	settle(all = false): void {
+		for (const group of this.groups) group.settle(all);
 	}
 
 	addFile(path: string, edited: boolean): void {
@@ -73,12 +83,7 @@ export class WorkSection {
 		}
 		const calls = this.groups.flatMap((g) => g.calls);
 		const thoughts = this.thoughts.filter((t) => t.el.parentElement === this.bodyEl);
-		const thinking = thoughts.some((t) => t.streaming);
-		this.el.dataset.state = thinking ? "running" : callsState(calls);
-		// While running, what the latest row is doing; afterwards, what the whole run did.
-		const last = this.bodyEl.lastElementChild;
-		const progress = thoughts.find((t) => t.el === last)?.streaming ? "Thinking…" : (this.groups.find((g) => g.el === last)?.progress ?? null);
-		this.labelEl.setText(progress ?? summarise(calls, thoughts.length > 0));
+		this.labelEl.setText(summarise(calls, thoughts.length > 0));
 		this.countEl.setText(callsCount(calls));
 	}
 }

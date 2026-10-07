@@ -42,6 +42,20 @@ export interface Call {
 	changes: boolean;
 	/** One of Apollo's Obsidian tools, whose errors are short sentences worth showing. */
 	vault: boolean;
+	/** When the call started, for how long it has been running. */
+	started: number;
+	/** An agent that runs on in the background after its call returns; it ends when the agent does (RND-9). */
+	background: boolean;
+	/** An agent's progress or totals, after the summary. */
+	detailEl: HTMLElement | null;
+}
+
+/** What Claude is doing right now, for the progress line (RND-8). */
+export interface Step {
+	/** "Reading notes/a.md", without a trailing ellipsis. */
+	label: string;
+	since: number;
+	kind: Kind | "thinking" | "text";
 }
 
 const SUMMARY_LENGTH = 120;
@@ -107,27 +121,17 @@ export function addChange(parent: HTMLElement, text: string, app: App, vaultPath
 	linkifyPaths(parent.createDiv({ cls: "apollo-activity-change", text }), app, vaultPath);
 }
 
-/** "running", "error", "stopped" or "done", for a status dot. */
-export function callsState(calls: Call[]): string {
-	if (calls.some((c) => c.state === "pending")) return "running";
-	if (calls.some((c) => c.state === "error")) return "error";
-	return calls.some((c) => c.state === "stopped") ? "stopped" : "done";
-}
-
-/** "3 tools · 1 failed", or "" for none. */
+/** "3 tools", or "" for none. Failures aren't counted: Claude usually just tries something else. */
 export function callsCount(calls: Call[]): string {
-	if (!calls.length) return "";
-	const counts = [`${calls.length} ${calls.length === 1 ? "tool" : "tools"}`];
-	const failed = calls.filter((c) => c.state === "error").length;
-	if (failed) counts.push(`${failed} failed`);
-	return counts.join(" · ");
+	return calls.length ? plural(calls.length, "tool", "tools") : "";
 }
 
 /**
  * A run of consecutive tool calls, collapsed to one row (RND-2). The header
- * shows what is running now, or a summary once everything has finished.
- * Files read and edited stay visible as links below it; the individual calls
- * are listed when expanded.
+ * is a summary of what the calls did so far; what is running now shows in
+ * the status row at the end of the transcript (RND-8). Files read and edited
+ * stay visible as links below it; the individual calls are listed when
+ * expanded.
  */
 export class ActivityGroup {
 	readonly el: HTMLElement;
@@ -147,7 +151,6 @@ export class ActivityGroup {
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity" });
 		const header = createToggleHeader(this.el);
-		header.createSpan({ cls: "apollo-activity-status" });
 		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
 		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
 		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
@@ -163,10 +166,10 @@ export class ActivityGroup {
 		return this.calls.some((c) => c.state === "pending");
 	}
 
-	/** What the latest call still running is doing, or null when none is. */
-	get progress(): string | null {
-		const running = this.calls.filter((c) => c.state === "pending");
-		return running.length ? `${running[running.length - 1]!.progress}…` : null;
+	/** The latest call the turn is waiting on, or null. Background agents don't hold up the turn. */
+	current(): Step | null {
+		const call = this.calls.filter((c) => c.state === "pending" && !c.background).pop();
+		return call ? { label: call.progress, since: call.started, kind: call.kind } : null;
 	}
 
 	add(id: string, name: string, input: Record<string, unknown>): void {
@@ -189,7 +192,7 @@ export class ActivityGroup {
 			}
 		}
 		const progress = vault ? vaultProgress(name.slice(VAULT_TOOL_PREFIX.length), kind, input, this.vaultPath) : progressText(kind, name, input, this.vaultPath);
-		this.callsById.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault });
+		this.callsById.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault, started: Date.now(), background: false, detailEl: null });
 		if (path && (kind === "read" || kind === "inspect" || kind === "edit")) this.addFile(path, kind === "edit");
 		this.render();
 	}
@@ -198,8 +201,7 @@ export class ActivityGroup {
 	finish(id: string, isError: boolean, output = ""): void {
 		const call = this.callsById.get(id);
 		if (!call || call.state !== "pending") return;
-		call.state = isError ? "error" : "done";
-		call.row.addClass(isError ? "is-error" : "is-done");
+		this.end(call, isError ? "error" : "done");
 		// Structural changes stay in view as a before/after summary (OBS-13).
 		if (call.changes && !isError && output && !output.startsWith("No changes")) {
 			addChange(this.changesEl, output, this.app, this.vaultPath);
@@ -212,15 +214,54 @@ export class ActivityGroup {
 		this.render();
 	}
 
-	/** Marks calls that will never get a result (the turn ended or was stopped) as stopped. */
-	settle(): void {
+	/** An agent call returned because the agent went to the background. It stays running until the agent ends. */
+	background(id: string): void {
+		const call = this.callsById.get(id);
+		if (call?.state === "pending") call.background = true;
+	}
+
+	/** An agent's latest step, for the status row, and its tool count, from Claude Code's task progress (RND-9). */
+	agentProgress(id: string, activity: string, toolUses: number, description: string): void {
+		const call = this.callsById.get(id);
+		// Between tool calls Claude Code repeats the task's description, which says nothing new.
+		if (!call || call.state !== "pending" || !activity || activity === description) return;
+		call.progress = `Agent: ${activity}`;
+		if (toolUses) this.setDetail(call, plural(toolUses, "tool", "tools"));
+	}
+
+	/** An agent finished, failed or was stopped. `detail` is its totals: "5 tools · 30s". */
+	endAgent(id: string, state: "done" | "error" | "stopped", detail: string): void {
+		const call = this.callsById.get(id);
+		if (!call) return;
+		// A foreground agent's call has already finished with its result.
+		if (call.state === "pending") this.end(call, state);
+		this.setDetail(call, detail);
+		this.render();
+	}
+
+	/** Files a subagent edits, listed with its call: what changed is worth seeing, what it read mostly isn't. */
+	addAgentEdit(path: string): void {
+		this.addFile(path, true);
+	}
+
+	/** Marks calls that will never get a result (the turn ended or was stopped) as stopped. Background agents carry on unless `all`. */
+	settle(all = false): void {
 		if (!this.pending) return;
 		for (const call of this.callsById.values()) {
-			if (call.state !== "pending") continue;
-			call.state = "stopped";
-			call.row.addClass("is-stopped");
+			if (call.state === "pending" && (all || !call.background)) this.end(call, "stopped");
 		}
 		this.render();
+	}
+
+	private end(call: Call, state: "done" | "error" | "stopped"): void {
+		call.state = state;
+		call.row.addClass(`is-${state}`);
+	}
+
+	private setDetail(call: Call, text: string): void {
+		if (!text) return;
+		call.detailEl ??= call.row.createSpan({ cls: "apollo-tool-detail" });
+		call.detailEl.setText(text);
 	}
 
 	/** A path argument, if it names a file in the vault right now. */
@@ -235,15 +276,13 @@ export class ActivityGroup {
 
 	private render(): void {
 		const calls = this.calls;
-		this.el.dataset.state = callsState(calls);
-		// While running, the latest call still in progress; afterwards, what the group did.
-		this.labelEl.setText(this.progress ?? summarise(calls));
+		this.labelEl.setText(summarise(calls));
 		this.countEl.setText(callsCount(calls));
 		this.section.update();
 	}
 }
 
-function toolKind(name: string): Kind {
+export function toolKind(name: string): Kind {
 	switch (name) {
 		case "Read":
 			return "read";
@@ -271,17 +310,16 @@ function toolKind(name: string): Kind {
 	}
 }
 
-function filePath(input: Record<string, unknown>): string | null {
+export function filePath(input: Record<string, unknown>): string | null {
 	const value = input.file_path ?? input.notebook_path;
 	return typeof value === "string" && value ? value : null;
 }
 
-/** "Read 3 files, ran 2 commands": what a finished group did, after "Thought" if it also thought. */
+/** "Read 3 files, ran 2 commands": what a group did so far, after "Thought" if it also thought. */
 export function summarise(calls: Call[], thought = false): string {
 	const count = (kind: Kind) => calls.filter((c) => c.kind === kind).length;
 	// File tools count distinct files, so reading a note twice is still one file.
 	const files = (kind: Kind) => new Set(calls.filter((c) => c.kind === kind).map((c, i) => c.path ?? i)).size;
-	const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 	const parts: string[] = [];
 	const add = (n: number, text: (n: number) => string) => n && parts.push(text(n));
 	add(files("read"), (n) => `read ${plural(n, "file", "files")}`);
@@ -294,11 +332,33 @@ export function summarise(calls: Call[], thought = false): string {
 	add(count("command"), (n) => `ran ${plural(n, "command", "commands")}`);
 	add(count("fetch"), (n) => `fetched ${plural(n, "page", "pages")}`);
 	add(count("web"), (n) => plural(n, "web search", "web searches"));
-	add(count("agent"), (n) => `ran ${plural(n, "agent", "agents")}`);
+	// An agent can run on long after its turn, so the summary says so rather than "ran".
+	const agents = calls.filter((c) => c.kind === "agent");
+	const running = agents.filter((c) => c.state === "pending").length;
+	add(agents.length - running, (n) => `ran ${plural(n, "agent", "agents")}`);
+	add(running, (n) => `running ${plural(n, "agent", "agents")}`);
 	add(count("other"), (n) => `used ${plural(n, parts.length ? "other tool" : "tool", parts.length ? "other tools" : "tools")}`);
 	if (thought) parts.unshift("thought");
 	const text = parts.join(", ");
 	return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function plural(n: number, one: string, many: string): string {
+	return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "12s", "1m 05s" or "1h 02m". */
+export function formatDuration(ms: number): string {
+	const secs = Math.max(0, Math.floor(ms / 1000));
+	if (secs < 60) return `${secs}s`;
+	const mins = Math.floor(secs / 60);
+	if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, "0")}s`;
+	return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
+}
+
+/** An agent's totals: "5 tools · 30s". */
+export function agentTotals(toolUses: number, durationMs: number): string {
+	return [toolUses ? plural(toolUses, "tool", "tools") : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
 }
 
 /** "Reading notes/a.md": what a running call is doing. */
