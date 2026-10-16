@@ -1,4 +1,4 @@
-import { FileSystemAdapter, Notice, Plugin, WorkspaceTabs, debounce, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type App, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
 import { CHAT_VIEW_TYPE, ChatView, userPrompt, type ChatViewState } from "./chat-view";
 import type { ChatSession } from "./chat-session";
@@ -143,6 +143,19 @@ export default class ApolloPlugin extends Plugin {
 				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
 			}),
 		);
+
+		// Empty tabs get a "New chat" button next to core's "New note" and "Go to file".
+		this.app.workspace.onLayoutReady(() => this.addEmptyTabActions());
+		this.registerEvent(this.app.workspace.on("layout-change", () => this.addEmptyTabActions()));
+		// Hotkeys can change while a tab is open; refresh the shown one when an empty tab gets focus.
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf?.view.getViewType() === "empty") this.addEmptyTabActions();
+			}),
+		);
+		this.register(() => {
+			for (const leaf of this.app.workspace.getLeavesOfType("empty")) leaf.view.containerEl.querySelector(".apollo-new-chat-action")?.remove();
+		});
 
 		this.addRibbonIcon("bot", "New Apollo chat", () => void this.openChat());
 		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
@@ -304,9 +317,49 @@ export default class ApolloPlugin extends Plugin {
 	}
 
 	private newChatInCurrentPane(): void {
-		const view = this.app.workspace.getActiveViewOfType(ChatView);
-		if (view) view.newChat();
+		const view = this.app.workspace.getActiveViewOfType(View);
+		if (view instanceof ChatView) view.newChat();
+		else if (view?.getViewType() === "empty") void this.openChatIn(view.leaf);
 		else void this.openChat();
+	}
+
+	/** Replaces a leaf's view, such as an empty tab's, with a new chat. */
+	private async openChatIn(leaf: WorkspaceLeaf): Promise<void> {
+		await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: {} });
+		await this.focusLeaf(leaf);
+	}
+
+	/**
+	 * Adds "New chat" to each empty tab's actions, or updates its hotkey.
+	 * Obsidian has no API for them, so this adds a button to core's list,
+	 * styled like core's own.
+	 */
+	private addEmptyTabActions(): void {
+		// The hotkey that does the same from here: a chat in this tab.
+		const hotkey = (this.app as App & AppInternals).hotkeyManager?.printHotkeyForCommand?.(`${this.manifest.id}:new-chat-in-current-pane`);
+		for (const leaf of this.app.workspace.getLeavesOfType("empty")) {
+			const list = leaf.view.containerEl.querySelector<HTMLElement>(".empty-state-action-list");
+			if (!list) continue;
+			const action = list.querySelector<HTMLElement>(".apollo-new-chat-action") ?? this.createEmptyTabAction(list, leaf);
+			action.querySelector(".empty-state-hotkey")?.remove();
+			if (hotkey) action.createSpan({ cls: "empty-state-hotkey", text: ` ${hotkey}` });
+		}
+	}
+
+	private createEmptyTabAction(list: HTMLElement, leaf: WorkspaceLeaf): HTMLElement {
+		const action = list.createDiv({
+			cls: "text-icon-button tappable mod-pill empty-state-action apollo-new-chat-action",
+			attr: { tabindex: "0", role: "button", "aria-label": "New chat" },
+		});
+		setIcon(action.createSpan({ cls: "text-button-icon" }), "bot");
+		action.createSpan({ cls: "text-button-label", text: "New chat" });
+		action.addEventListener("click", () => void this.openChatIn(leaf));
+		action.addEventListener("keydown", (e) => {
+			if (e.key !== "Enter" && e.key !== " ") return;
+			e.preventDefault();
+			void this.openChatIn(leaf);
+		});
+		return action;
 	}
 
 	private newLeaf(placement: ChatPlacement): WorkspaceLeaf {
@@ -364,6 +417,11 @@ interface MenuInternals {
 	items?: { section?: string }[];
 	/** Section order, from `addSections`. */
 	sections?: string[];
+}
+
+/** Obsidian internals the public API doesn't expose. May be missing. */
+interface AppInternals {
+	hotkeyManager?: { printHotkeyForCommand?(id: string): string };
 }
 
 /** The session a chat leaf shows. Works for deferred tabs, whose saved state stands in for the view. */

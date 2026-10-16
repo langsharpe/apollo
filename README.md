@@ -27,7 +27,7 @@ obsidian vault=ApolloTest dev:errors
 
 ## Usage
 
-Run **Apollo: New chat** (or click the bot ribbon icon) to open a chat. **Open new chats in** (settings) picks a new tab, a split right or down, or the right sidebar. **Apollo: New chat in current pane** (`Mod+Alt+N`, or `/new` in the input) starts a fresh session in the focused chat. Other commands: *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*, *Open chat list*. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings.
+Run **Apollo: New chat** (or click the bot ribbon icon, or **New chat** in an empty tab) to open a chat. **Open new chats in** (settings) picks a new tab, a split right or down, or the right sidebar. **Apollo: New chat in current pane** (`Mod+Alt+N`, or `/new` in the input) starts a fresh session in the focused chat, or opens a chat in the focused empty tab. Other commands: *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*, *Open chat list*. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings.
 
 Each chat keeps one Claude Code process running between turns, and stops it after the **Idle process timeout** (10 minutes by default). The next message resumes the session. Open chats, their drafts and scroll positions come back when Obsidian restarts.
 
