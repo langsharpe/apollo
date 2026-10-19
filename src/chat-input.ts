@@ -70,7 +70,7 @@ export class ChatInput {
 		this.warningEl.hide();
 		const box = parent.createDiv({ cls: "apollo-input-box" });
 		this.backdropEl = box.createDiv({ cls: "apollo-input-backdrop", attr: { "aria-hidden": "true" } });
-		this.el = box.createEl("textarea", { attr: { placeholder: "Ask Claude…  (@ for files, / for commands, Enter to send)", rows: "3" } });
+		this.el = box.createEl("textarea", { attr: { placeholder: "Ask Claude…  (@ for files, / for commands, Enter to send)", rows: "1" } });
 		this.slashMenu = new InputMenu(box, (entry, how) => this.chooseCommand(entry, how), "apollo-slash-menu");
 		this.fileMenu = new InputMenu(box, (file, how) => this.chooseFile(file, how), "apollo-file-menu");
 
