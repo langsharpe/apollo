@@ -13,12 +13,18 @@
 	gap: var(--size-4-2);
 }
 
+/* Blocks are spaced like paragraphs in a note, so thinking and tool rows sit apart from the messages around them. */
 .apollo-transcript {
 	flex-shrink: 0;
 	display: flex;
 	flex-direction: column;
-	gap: var(--size-4-2);
+	gap: var(--p-spacing);
 	user-select: text;
+}
+
+/* A new turn starts with a little more room. */
+.apollo-transcript > :not(.apollo-user) + .apollo-user {
+	margin-top: var(--size-4-2);
 }
 
 /* The placeholder sits in the middle; otherwise the status row follows the last message. */
@@ -33,6 +39,29 @@
 
 .apollo-msg {
 	position: relative;
+}
+
+/* Claude's replies and plans use the theme's text font, size and line height, so they read like a note; their Markdown gets its block spacing from .markdown-rendered. */
+.apollo-msg.apollo-assistant,
+.apollo-card-markdown {
+	font-family: var(--font-text);
+	font-size: var(--font-text-size);
+	line-height: var(--line-height-normal);
+}
+
+/* Thinking stays small, but gets the same line height. */
+.apollo-thinking-body {
+	line-height: var(--line-height-normal);
+}
+
+.apollo-msg .markdown-rendered > :first-child,
+.apollo-card-markdown > :first-child {
+	margin-top: 0;
+}
+
+.apollo-msg .markdown-rendered > :last-child,
+.apollo-card-markdown > :last-child {
+	margin-bottom: 0;
 }
 
 .apollo-msg.apollo-user {
@@ -350,14 +379,6 @@
 
 .apollo-thinking.is-open .apollo-thinking-body {
 	display: block;
-}
-
-.apollo-thinking-body > :first-child {
-	margin-top: 0;
-}
-
-.apollo-thinking-body > :last-child {
-	margin-bottom: 0;
 }
 
 /* A run of thinking and tool calls between messages (RND-7): one row, with the thinking and groups inside. */

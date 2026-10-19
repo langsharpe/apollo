@@ -812,8 +812,9 @@ export class ChatView extends ItemView {
 		return el;
 	}
 
-	/** Renders Markdown, then makes vault paths in it clickable (CTX-10). */
+	/** Renders Markdown, styled as the theme styles notes, then makes vault paths in it clickable (CTX-10). */
 	private async renderMarkdown(text: string, el: HTMLElement): Promise<void> {
+		el.addClass("markdown-rendered");
 		await MarkdownRenderer.render(this.app, text, el, "", this);
 		linkifyPaths(el, this.app, this.plugin.vaultPath());
 	}

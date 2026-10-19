@@ -127,7 +127,7 @@ function renderPlan(card: HTMLElement, ctx: CardContext, req: PermissionRequest,
 	renderHeader(card, req, "Claude has a plan and wants to start");
 	const plan = typeof input.plan === "string" ? input.plan : "";
 	if (plan) {
-		const body = card.createDiv({ cls: "apollo-card-body apollo-card-markdown" });
+		const body = card.createDiv({ cls: "apollo-card-body apollo-card-markdown markdown-rendered" });
 		void MarkdownRenderer.render(ctx.app, plan, body, "", ctx.component);
 	}
 
