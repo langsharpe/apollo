@@ -34,6 +34,8 @@ export interface ChatViewState {
 	effort: EffortLevel | null;
 	/** Output style the chat started with; empty for Claude Code's default prompt. */
 	outputStyle: string;
+	/** Thinking and tool calls show in the transcript, or null to follow the setting. */
+	showWork: boolean | null;
 }
 
 /** Obsidian internals the public API doesn't expose. All may be missing. */
@@ -80,6 +82,8 @@ export class ChatView extends ItemView {
 	private pinned = true;
 	/** scrollTop at the last scroll event, to tell scrolling up from content growing. */
 	private lastScrollTop = 0;
+	/** This chat shows or hides thinking and tool calls regardless of the setting, or null to follow it. */
+	private workOverride: boolean | null = null;
 
 	private infoEl!: HTMLElement;
 	private modelEl!: HTMLSelectElement;
@@ -140,6 +144,7 @@ export class ChatView extends ItemView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("apollo-chat");
+		root.toggleClass("apollo-hide-work", !this.showWork);
 
 		this.scrollEl = root.createDiv({ cls: "apollo-scroll" });
 		this.transcriptEl = this.scrollEl.createDiv({ cls: "apollo-transcript" });
@@ -235,6 +240,7 @@ export class ChatView extends ItemView {
 			model: this.session?.model ?? null,
 			effort: this.session?.effort ?? null,
 			outputStyle: this.session?.outputStyle ?? "",
+			showWork: this.workOverride,
 		};
 		return { ...super.getState(), ...state };
 	}
@@ -261,12 +267,24 @@ export class ChatView extends ItemView {
 			this.session.outputStyle = s.outputStyle;
 			this.updateInfo();
 		}
+		if (s.showWork !== undefined && s.showWork !== this.workOverride) {
+			this.workOverride = s.showWork;
+			this.applyShowWork();
+		}
 		if (s.draft && !this.input.value) this.input.value = s.draft;
 		await super.setState(state, result);
 	}
 
 	override onPaneMenu(menu: Menu, source: string): void {
 		super.onPaneMenu(menu, source);
+		menu.addItem((item) =>
+			item
+				.setSection("view")
+				.setTitle("Show thinking and tool calls")
+				.setIcon("brain")
+				.setChecked(this.showWork)
+				.onClick(() => this.setShowWork(!this.showWork)),
+		);
 		const id = this.sessionId;
 		if (!id) return;
 		menu.addItem((item) => item.setSection("action").setTitle("Rename chat").setIcon("pencil").onClick(() => void this.plugin.renameChat(id, this.title)));
@@ -278,6 +296,48 @@ export class ChatView extends ItemView {
 	private hasFocus(): boolean {
 		const active = this.containerEl.doc.activeElement;
 		return !active || active === this.containerEl.doc.body || this.containerEl.contains(active);
+	}
+
+	/**
+	 * Thinking and tool calls show in the transcript. Otherwise they're hidden,
+	 * and the status row still says what Claude is doing (RND-8, RND-10).
+	 */
+	private get showWork(): boolean {
+		return this.workOverride ?? this.plugin.settings.showWork;
+	}
+
+	/** Shows or hides thinking and tool calls in this chat. Matching the setting goes back to following it. */
+	setShowWork(show: boolean, anchor?: HTMLElement): void {
+		this.workOverride = show === this.plugin.settings.showWork ? null : show;
+		this.applyShowWork(anchor);
+		this.app.workspace.requestSaveLayout();
+	}
+
+	/**
+	 * Updates the transcript and toggles after the chat or the setting changes.
+	 * `anchor` stays where it is on screen, so the message you clicked doesn't
+	 * jump; otherwise a pinned transcript stays at its end.
+	 */
+	applyShowWork(anchor?: HTMLElement): void {
+		const before = anchor?.getBoundingClientRect().top;
+		this.contentEl.toggleClass("apollo-hide-work", !this.showWork);
+		for (const el of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
+		if (anchor && before !== undefined) {
+			this.scrollEl.scrollTop += anchor.getBoundingClientRect().top - before;
+			this.pinned = this.isNearEnd();
+		} else if (this.pinned) {
+			this.scrollToEnd();
+		}
+	}
+
+	toggleWork(): void {
+		this.setShowWork(!this.showWork);
+	}
+
+	private renderWorkToggle(el: HTMLElement): void {
+		setIcon(el, this.showWork ? "brain" : "brain-circuit");
+		el.toggleClass("is-active", this.showWork);
+		setTooltip(el, this.showWork ? "Hide thinking and tool calls" : "Show thinking and tool calls");
 	}
 
 	focusInput(): void {
@@ -711,10 +771,16 @@ export class ChatView extends ItemView {
 		await Promise.all(renders);
 	}
 
-	/** "Fork from here" on a message (HIST-3a). */
+	/** Hover actions on a message: show or hide thinking and tool calls, and "Fork from here" (HIST-3a). */
 	private addForkAction(el: HTMLElement, uuid: string, role: "user" | "assistant"): void {
 		if (el.querySelector(":scope > .apollo-msg-actions")) return;
 		const actions = el.createDiv({ cls: "apollo-msg-actions" });
+		const work = actions.createDiv({ cls: "clickable-icon apollo-work-toggle" });
+		this.renderWorkToggle(work);
+		this.registerDomEvent(work, "click", (evt) => {
+			evt.stopPropagation();
+			this.setShowWork(!this.showWork, el);
+		});
 		const fork = actions.createDiv({ cls: "clickable-icon" });
 		setIcon(fork, "git-branch");
 		setTooltip(fork, role === "user" ? "Fork from here, to edit and resend this message" : "Fork from here");

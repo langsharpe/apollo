@@ -112,6 +112,8 @@ export interface ApolloSettings {
 	presentMaxPerTurn: number;
 	/** Present notes the agent creates with Write (OBS-19). */
 	autoPresent: boolean;
+	/** Show thinking and tool calls in chats that haven't been switched individually. */
+	showWork: boolean;
 }
 
 export const DEFAULT_SETTINGS: ApolloSettings = {
@@ -129,6 +131,7 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 	presentFocus: false,
 	presentMaxPerTurn: 3,
 	autoPresent: false,
+	showWork: false,
 };
 
 /** Control keys for per-tool toggles, which are stored in `disabledObsidianTools`. */
@@ -161,6 +164,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 		await this.plugin.save();
 		// Tool toggles only show while the tools are on.
 		if (key === "obsidianTools") this.update();
+		if (key === "showWork") this.plugin.applyShowWork();
 	}
 
 	/** None, then each output style Claude Code last reported. */
@@ -238,6 +242,11 @@ export class ApolloSettingTab extends PluginSettingTab {
 					key: "openChatsIn" satisfies keyof ApolloSettings,
 					options: CHAT_PLACEMENTS,
 				},
+			},
+			{
+				name: "Show thinking and tool calls",
+				desc: "Show Claude's thinking and tool calls between messages. Off hides them; the status row still says what Claude is doing. Each chat can switch from a message's hover actions, its tab menu or the command.",
+				control: { type: "toggle", key: "showWork" satisfies keyof ApolloSettings },
 			},
 			{
 				name: "Reference format",

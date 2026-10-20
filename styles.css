@@ -106,6 +106,17 @@
 	padding: var(--size-2-1);
 }
 
+/* The work toggle is lit while thinking and tool calls show. */
+.apollo-msg-actions .apollo-work-toggle.is-active {
+	color: var(--interactive-accent);
+}
+
+/* Thinking and tool calls are hidden unless the setting or the chat shows them (RND-10). */
+.apollo-chat.apollo-hide-work .apollo-work,
+.apollo-chat.apollo-hide-work .apollo-skill {
+	display: none;
+}
+
 /* Tool calls: consecutive calls collapse into one activity group (RND-2). */
 .apollo-activity {
 	display: flex;

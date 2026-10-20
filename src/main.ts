@@ -86,6 +86,16 @@ export default class ApolloPlugin extends Plugin {
 			},
 		});
 		this.addCommand({
+			id: "toggle-work",
+			name: "Show or hide thinking and tool calls",
+			checkCallback: (checking) => {
+				const view = this.app.workspace.getActiveViewOfType(ChatView);
+				if (!view) return false;
+				if (!checking) view.toggleWork();
+				return true;
+			},
+		});
+		this.addCommand({
 			id: "focus-next-chat",
 			name: "Focus next chat",
 			callback: () => void this.focusChat(1),
@@ -381,6 +391,11 @@ export default class ApolloPlugin extends Plugin {
 			case "split-down":
 				return workspace.getLeaf("split", "horizontal");
 		}
+	}
+
+	/** Chats that follow the setting pick up its new value. */
+	applyShowWork(): void {
+		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyShowWork();
 	}
 
 	private chatLeaves(): WorkspaceLeaf[] {
