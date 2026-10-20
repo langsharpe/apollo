@@ -78,10 +78,6 @@
 	border: 1px dashed var(--background-modifier-border);
 }
 
-.apollo-msg.apollo-assistant.is-streaming {
-	white-space: pre-wrap;
-}
-
 .apollo-msg.apollo-note {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);

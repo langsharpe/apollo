@@ -1,5 +1,5 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { agentTotals, filePath, formatDuration, toolKind, type ActivityGroup, type Step } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
@@ -9,6 +9,7 @@ import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
 import { ProgressLine } from "./progress";
+import { MarkdownStream } from "./markdown-stream";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
@@ -92,8 +93,7 @@ export class ChatView extends ItemView {
 	private stopBtn!: HTMLButtonElement;
 
 	// Streaming state for the current text block.
-	private blockEl: HTMLElement | null = null;
-	private blockText = "";
+	private block: MarkdownStream | null = null;
 	private blockStarted = 0;
 	/** The thinking block streaming now, if any. */
 	private thinking: ThinkingBlock | null = null;
@@ -361,7 +361,8 @@ export class ChatView extends ItemView {
 		this.queued = [];
 		this.pendingCards = 0;
 		this.stopping = false;
-		this.blockEl = null;
+		this.block?.cancel();
+		this.block = null;
 		this.thinking = null;
 		this.unidentified = [];
 		this.toolResults.clear();
@@ -622,7 +623,7 @@ export class ChatView extends ItemView {
 
 	/** What the turn is waiting on: a reply streaming in, or the latest thinking or tool call (RND-8). */
 	private currentStep(): Step | null {
-		if (this.blockEl) return { label: "Writing a reply", since: this.blockStarted, kind: "text" };
+		if (this.block) return { label: "Writing a reply", since: this.blockStarted, kind: "text" };
 		for (const section of [...this.sections].reverse()) {
 			const step = section.current();
 			if (step) return step;
@@ -813,9 +814,9 @@ export class ChatView extends ItemView {
 	}
 
 	/** Renders Markdown, styled as the theme styles notes, then makes vault paths in it clickable (CTX-10). */
-	private async renderMarkdown(text: string, el: HTMLElement): Promise<void> {
+	private async renderMarkdown(text: string, el: HTMLElement, component: Component = this): Promise<void> {
 		el.addClass("markdown-rendered");
-		await MarkdownRenderer.render(this.app, text, el, "", this);
+		await MarkdownRenderer.render(this.app, text, el, "", component);
 		linkifyPaths(el, this.app, this.plugin.vaultPath());
 	}
 
@@ -973,17 +974,15 @@ export class ChatView extends ItemView {
 
 	private startBlock(): void {
 		this.finishBlock();
-		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant is-streaming" });
-		this.blockEl = el.createDiv();
-		this.blockText = "";
+		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
+		this.block = new MarkdownStream(el.createDiv({ cls: "markdown-rendered" }), (text, out, component) => this.renderMarkdown(text, out, component), this);
 		this.blockStarted = Date.now();
 		this.unidentified.push(el);
 	}
 
 	private appendBlock(text: string): void {
-		if (!this.blockEl) this.startBlock();
-		this.blockText += text;
-		this.blockEl!.setText(this.blockText);
+		if (!this.block) this.startBlock();
+		this.block!.append(text);
 	}
 
 	private startThinking(): void {
@@ -991,16 +990,11 @@ export class ChatView extends ItemView {
 		this.thinking = this.workSection().thinking();
 	}
 
-	// Swap the plain streamed text for rendered Markdown once the block completes.
 	private finishBlock(): void {
 		void this.thinking?.finish();
 		this.thinking = null;
-		const el = this.blockEl;
-		if (!el) return;
-		this.blockEl = null;
-		el.parentElement?.removeClass("is-streaming");
-		el.empty();
-		void this.renderMarkdown(this.blockText, el);
+		void this.block?.finish();
+		this.block = null;
 	}
 
 	private note(text: string, cls = "apollo-note"): void {

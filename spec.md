@@ -170,7 +170,7 @@ Typing `/` at the start of the input opens a menu of everything invocable. It mu
 
 | ID | Requirement |
 |---|---|
-| RND-1 | Assistant text streams (`includePartialMessages`) and renders with `MarkdownRenderer.render`, so wikilinks, embeds and callouts work. |
+| RND-1 | Assistant text streams (`includePartialMessages`) and renders with `MarkdownRenderer.render`, so wikilinks, embeds and callouts work. It renders as Markdown while it streams, not as raw text that changes when the block ends; a code block or math block shows as plain text until it closes. |
 | RND-2 | Tool calls collapse into an activity row (count, files touched); expandable to full input/output. |
 | RND-3 | Edits show a diff; clicking opens the file at the changed line. |
 | RND-4 | Context usage meter from result usage data. |
