@@ -58,6 +58,8 @@ const TITLE_LENGTH = 50;
 
 /** Pixels from the bottom that still count as being at the end. */
 const STICKY_SCROLL = 40;
+/** Room above a message scrolled to the top of the transcript. */
+const ANCHOR_MARGIN = 8;
 
 /**
  * One chat per leaf. Messages go to a long-lived Claude Code process; while a
@@ -80,8 +82,12 @@ export class ChatView extends ItemView {
 	private unseen = false;
 	/** New output keeps the end of the transcript in view. Only the user's own scrolling clears it. */
 	private pinned = true;
-	/** scrollTop at the last scroll event, to tell scrolling up from content growing. */
+	/** scrollTop at the last scroll event, or the last one set here, to tell your scrolling from content changing. */
 	private lastScrollTop = 0;
+	/** The message you sent last. It's scrolled to the top so its reply reads from the start, and output doesn't push it away. */
+	private anchor: HTMLElement | null = null;
+	/** Padding below the transcript that lets `anchor` reach the top while the reply is shorter than the view. */
+	private spacer = 0;
 	/** This chat shows or hides thinking and tool calls regardless of the setting, or null to follow it. */
 	private workOverride: boolean | null = null;
 
@@ -156,7 +162,10 @@ export class ChatView extends ItemView {
 		});
 		this.registerDomEvent(this.scrollEl, "scroll", () => this.onScroll());
 		// Output often grows after it's added (Markdown rendering, tool results), so follow every change while pinned.
-		const follow = () => this.pinned && this.scrollToEnd();
+		const follow = () => {
+			this.updateSpacer();
+			if (this.pinned) this.scrollToEnd();
+		};
 		const mutations = new MutationObserver(follow);
 		mutations.observe(this.scrollEl, { childList: true, subtree: true, characterData: true });
 		// The input growing and pane resizes shrink the transcript.
@@ -322,8 +331,9 @@ export class ChatView extends ItemView {
 		const before = anchor?.getBoundingClientRect().top;
 		this.contentEl.toggleClass("apollo-hide-work", !this.showWork);
 		for (const el of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
+		this.updateSpacer();
 		if (anchor && before !== undefined) {
-			this.scrollEl.scrollTop += anchor.getBoundingClientRect().top - before;
+			this.setScrollTop(this.scrollEl.scrollTop + anchor.getBoundingClientRect().top - before);
 			this.pinned = this.isNearEnd();
 		} else if (this.pinned) {
 			this.scrollToEnd();
@@ -382,7 +392,7 @@ export class ChatView extends ItemView {
 		if (session !== this.session) return;
 		if (scroll == null) this.scrollToEnd();
 		else {
-			this.scrollEl.scrollTop = scroll;
+			this.setScrollTop(scroll);
 			this.pinned = this.isNearEnd();
 		}
 		void this.refreshTitle();
@@ -433,6 +443,8 @@ export class ChatView extends ItemView {
 		this.transcriptEl.empty();
 		this.pinned = true;
 		this.lastScrollTop = 0;
+		this.anchor = null;
+		this.updateSpacer();
 		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
 		this.setTitle(title || NEW_CHAT_TITLE);
 		this.updateInfo();
@@ -451,12 +463,13 @@ export class ChatView extends ItemView {
 		this.transcriptEl.querySelector(".apollo-empty")?.remove();
 		const el = this.userBubble(text);
 		this.skillRowForCommand(text);
-		this.scrollToEnd();
+		// A queued message moves to the top when it goes out.
 		if (this.session.busy) {
 			el.addClass("is-queued");
 			this.queued.push({ text, el });
 			return;
 		}
+		this.scrollToTop(el);
 		void this.send(text, [el]);
 	}
 
@@ -503,8 +516,8 @@ export class ChatView extends ItemView {
 				{ app: this.app, component: this, vaultPath: this.plugin.vaultPath(), takeFocus: this.hasFocus() },
 				{ toolName, input, options, autoMode: this.mode === "auto" },
 			);
-			// A card needs an answer, so always bring it into view.
-			this.scrollToEnd();
+			// A card needs an answer, so always bring it into view, without following the output after it.
+			this.setScrollTop(this.scrollEl.scrollHeight);
 			const result = await decision;
 			// The answered card dropped its buttons and fields; give the caret back to the input.
 			if (this.hasFocus()) this.input.focus();
@@ -717,6 +730,7 @@ export class ChatView extends ItemView {
 			for (const q of this.queued) this.transcriptEl.appendChild(q.el).removeClass("is-queued");
 			const bubbles = this.queued.map((q) => q.el);
 			this.queued = [];
+			if (!this.pinned) this.scrollToTop(bubbles[0]!);
 			void this.send(text, bubbles);
 		} else {
 			this.refreshStatus();
@@ -1171,15 +1185,57 @@ export class ChatView extends ItemView {
 		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.toggleAttribute("data-apollo-unseen", unseen);
 	}
 
+	/** At the end of the output, not in the room left below a message at the top. */
 	private isNearEnd(): boolean {
 		const el = this.scrollEl;
-		return el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL;
+		return !this.spacer && el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL;
 	}
 
 	/** Shows the end of the transcript and keeps it in view as output arrives. */
 	private scrollToEnd(): void {
 		this.pinned = true;
-		this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
+		this.setScrollTop(this.scrollEl.scrollHeight);
+	}
+
+	/**
+	 * Puts a message you sent at the top of the view (RND-11), so its reply reads from
+	 * the start as it streams in below. The view stays there until you scroll.
+	 */
+	private scrollToTop(el: HTMLElement): void {
+		this.anchor = el;
+		this.pinned = false;
+		this.updateSpacer();
+		this.setScrollTop(this.offsetOf(el) - ANCHOR_MARGIN);
+	}
+
+	/** Scrolls without the scroll event counting as yours. */
+	private setScrollTop(top: number): void {
+		this.scrollEl.scrollTop = top;
+		this.lastScrollTop = this.scrollEl.scrollTop;
+	}
+
+	/** Where `el` starts in the scrolled content. */
+	private offsetOf(el: HTMLElement): number {
+		return el.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top + this.scrollEl.scrollTop;
+	}
+
+	/**
+	 * Sizes the room below the transcript so the anchored message can sit at
+	 * the top. It shrinks as the reply grows, so the content doesn't move, and
+	 * is gone once the reply fills the view.
+	 */
+	private updateSpacer(): void {
+		const el = this.scrollEl;
+		let room = 0;
+		if (this.anchor?.isConnected) {
+			const top = el.getBoundingClientRect().top - el.scrollTop;
+			let end = 0;
+			for (const child of Array.from(el.children)) end = Math.max(end, child.getBoundingClientRect().bottom - top);
+			room = Math.max(0, Math.ceil(this.offsetOf(this.anchor) - ANCHOR_MARGIN + el.clientHeight - end));
+		}
+		if (room === this.spacer) return;
+		this.spacer = room;
+		el.style.paddingBottom = room ? `${room}px` : "";
 	}
 
 	/**
@@ -1188,9 +1244,11 @@ export class ChatView extends ItemView {
 	 */
 	private onScroll(): void {
 		const top = this.scrollEl.scrollTop;
-		if (this.isNearEnd()) this.pinned = true;
-		else if (top < this.lastScrollTop) this.pinned = false;
-		this.lastScrollTop = top;
+		if (top !== this.lastScrollTop) {
+			if (this.isNearEnd()) this.pinned = true;
+			else if (top < this.lastScrollTop) this.pinned = false;
+			this.lastScrollTop = top;
+		}
 		this.app.workspace.requestSaveLayout();
 	}
 }
