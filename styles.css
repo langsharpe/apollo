@@ -680,6 +680,14 @@
 	}
 }
 
+/* "Readable line length" caps the transcript and input like a note's text; the scrollbar stays at the pane's edge. */
+.apollo-readable-width .apollo-scroll > *,
+.apollo-readable-width .apollo-input {
+	width: 100%;
+	max-width: var(--file-line-width);
+	margin-inline: auto;
+}
+
 /* The input and toolbar below the transcript. */
 .apollo-input {
 	flex-shrink: 0;

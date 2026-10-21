@@ -1,5 +1,5 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type EventRef, type TAbstractFile, type Vault, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { agentTotals, filePath, formatDuration, toolKind, type ActivityGroup, type Step } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
@@ -48,6 +48,13 @@ interface LeafInternals {
 interface ViewInternals {
 	/** The view header's title. */
 	titleEl?: HTMLElement;
+}
+
+interface VaultInternals {
+	/** Values from `.obsidian/app.json`, such as `readableLineLength`. */
+	getConfig?(key: string): unknown;
+	/** Fires with the key after a setting changes. */
+	on(name: "config-changed", callback: (key: string) => unknown): EventRef;
 }
 
 /** What an Agent call returns when the agent goes to the background. */
@@ -151,6 +158,16 @@ export class ChatView extends ItemView {
 		root.empty();
 		root.addClass("apollo-chat");
 		root.toggleClass("apollo-hide-work", !this.showWork);
+		this.applyReadableWidth();
+		// Notes follow the setting as soon as it changes, so chats do too.
+		this.registerEvent(
+			(this.app.vault as Vault & VaultInternals).on("config-changed", (key) => {
+				if (key !== "readableLineLength") return;
+				this.applyReadableWidth();
+				this.updateSpacer();
+				if (this.pinned) this.scrollToEnd();
+			}),
+		);
 
 		this.scrollEl = root.createDiv({ cls: "apollo-scroll" });
 		this.transcriptEl = this.scrollEl.createDiv({ cls: "apollo-transcript" });
@@ -320,6 +337,16 @@ export class ChatView extends ItemView {
 		this.workOverride = show === this.plugin.settings.showWork ? null : show;
 		this.applyShowWork(anchor);
 		this.app.workspace.requestSaveLayout();
+	}
+
+	/**
+	 * Caps the transcript and input at the theme's `--file-line-width` when
+	 * "Readable line length" is on, like a note. It only shows in panes wider
+	 * than that, such as a chat tab in the main area.
+	 */
+	private applyReadableWidth(): void {
+		const readable = (this.app.vault as Vault & VaultInternals).getConfig?.("readableLineLength");
+		this.contentEl.toggleClass("apollo-readable-width", readable !== false);
 	}
 
 	/**
