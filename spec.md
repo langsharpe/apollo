@@ -92,6 +92,7 @@ This replaces copying paths into chat by hand.
 | CTX-8 | **Insertion format** (setting): `@relative/path.md` (Claude Code @-mention, contents attached) or plain `relative/path.md` (path only, agent reads it if needed). Default: plain path, since it's cheaper and lets the agent decide. |
 | CTX-9 | Chips are visible in the sent message and clickable to open the file. |
 | CTX-10 | Paths in assistant output and tool calls render as clickable links that open the file (or reveal the folder). |
+| CTX-11 | URLs and `[[wikilinks]]` in a sent message are links: URLs open in the browser, wikilinks open the note as Obsidian does (unresolved ones are dimmed and create the note). |
 
 ### 4.4 System prompt modes
 

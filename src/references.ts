@@ -170,8 +170,27 @@ export function createReferenceEl(parent: HTMLElement | DocumentFragment, text: 
 	return el;
 }
 
-/** Writes text into `el`, with references as chips (CTX-9). */
+/** Writes text into `el`, with references as chips (CTX-9) and URLs and wikilinks as links (CTX-11). */
 export function renderWithReferences(el: HTMLElement, text: string, app: App, vaultPath: string): void {
+	let last = 0;
+	for (const link of findLinks(text)) {
+		if (link.from > last) renderPaths(el, text.slice(last, link.from), app, vaultPath);
+		const label = text.slice(link.from, link.to);
+		if (link.url) {
+			el.createEl("a", { cls: "external-link", text: label, href: link.url, attr: { target: "_blank", rel: "noopener nofollow" } });
+		} else {
+			const linkpath = link.wikilink!.split(/[#^]/)[0]!.trim();
+			const resolved = !linkpath || app.metadataCache.getFirstLinkpathDest(linkpath, "");
+			const a = el.createEl("a", { cls: "internal-link", text: label, href: link.wikilink });
+			a.dataset.href = link.wikilink;
+			a.toggleClass("is-unresolved", !resolved);
+		}
+		last = link.to;
+	}
+	if (last < text.length) renderPaths(el, text.slice(last), app, vaultPath);
+}
+
+function renderPaths(el: HTMLElement, text: string, app: App, vaultPath: string): void {
 	let last = 0;
 	for (const ref of findReferences(text, app, vaultPath)) {
 		if (ref.from > last) el.appendText(text.slice(last, ref.from));
@@ -181,6 +200,26 @@ export function renderWithReferences(el: HTMLElement, text: string, app: App, va
 		last = ref.to;
 	}
 	if (last < text.length) el.appendText(text.slice(last));
+}
+
+const LINK = /\[\[([^\]|\n]+)(?:\|[^\]\n]*)?\]\]|\b(?:https?:\/\/|mailto:|obsidian:\/\/)[^\s<>"'`]+/g;
+
+/**
+ * URLs and `[[wikilinks]]` in a sent message (CTX-11). A URL loses trailing
+ * punctuation and an unmatched `)`, so "(see https://x.com)." links just the URL.
+ */
+function findLinks(text: string): { from: number; to: number; url?: string; wikilink?: string }[] {
+	const links = [];
+	for (const m of text.matchAll(LINK)) {
+		if (m[1] !== undefined) {
+			links.push({ from: m.index, to: m.index + m[0].length, wikilink: m[1].trim() });
+			continue;
+		}
+		let url = m[0].replace(/[.,;:!?'"]+$/, "");
+		while (url.endsWith(")") && url.split("(").length < url.split(")").length) url = url.slice(0, -1).replace(/[.,;:!?'"]+$/, "");
+		links.push({ from: m.index, to: m.index + url.length, url });
+	}
+	return links;
 }
 
 /**
