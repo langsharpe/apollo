@@ -4,6 +4,7 @@ import type { ActivityGroup } from "./activity";
 import { filePath, toolKind, type Step } from "./tool-calls";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
+import { ChatToolbar } from "./chat-toolbar";
 import { ChatSession } from "./chat-session";
 import { agentTotals, errorMessage, formatDuration, truncate } from "./format";
 import type ApolloPlugin from "./main";
@@ -16,7 +17,7 @@ import { MarkdownStream } from "./markdown-stream";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { parseApolloCommand } from "./apollo-commands";
-import { newChatConfig, type ChatConfig, effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
+import { newChatConfig, type ChatConfig, effortOptions, nullIfDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
 import { contentBlocks, displayPrompt, INTERRUPTED, resultText, taskNotification } from "./transcript-history";
 import type { ThinkingBlock } from "./thinking";
 import { TranscriptScroller } from "./transcript-scroll";
@@ -71,17 +72,13 @@ export class ChatView extends ItemView {
 	/** Work sections open as they're added, after the brain icon or the status row showed them, until they're hidden again. */
 	private expandWork = false;
 
-	private infoEl!: HTMLElement;
-	private modelEl!: HTMLSelectElement;
-	private effortEl!: HTMLSelectElement;
-	private modeEl!: HTMLSelectElement;
+	private toolbar!: ChatToolbar;
 	/** Scrolls the transcript and the status row after it. */
 	private scrollEl!: HTMLElement;
 	private scroller!: TranscriptScroller;
 	private transcriptEl!: HTMLElement;
 	private progress!: ProgressLine;
 	private input!: ChatInput;
-	private stopBtn!: HTMLButtonElement;
 
 	// Streaming state for the current text block.
 	private textStream: MarkdownStream | null = null;
@@ -174,16 +171,15 @@ export class ChatView extends ItemView {
 			},
 			changed: () => this.app.workspace.requestSaveLayout(),
 		});
-		const toolbar = form.createDiv({ cls: "apollo-toolbar" });
-		// Status dot plus model and session details on hover.
-		this.infoEl = toolbar.createDiv({ cls: "apollo-info clickable-icon" });
-		setIcon(this.infoEl, "info");
-		// The tooltip shows a short ID, but `claude --resume` needs the full one.
-		this.registerDomEvent(this.infoEl, "click", () => this.copySessionId());
-		this.modelEl = toolbar.createEl("select", { cls: "dropdown apollo-model", attr: { "aria-label": "Model" } });
-		this.registerDomEvent(this.modelEl, "change", () => void this.changeModel(nullIfDefault(this.modelEl.value)));
-		this.effortEl = toolbar.createEl("select", { cls: "dropdown apollo-effort", attr: { "aria-label": "Effort" } });
-		this.registerDomEvent(this.effortEl, "change", () => void this.changeEffort(nullIfDefault(this.effortEl.value as EffortLevel | "default")));
+		this.toolbar = new ChatToolbar(form, this, {
+			copySessionId: () => this.copySessionId(),
+			changeModel: (model) => void this.changeModel(model),
+			changeEffort: (effort) => void this.changeEffort(effort),
+			changeMode: (mode) => void this.changeMode(mode),
+			showOpenNotes: (evt) => this.input.showOpenNotes(evt),
+			send: () => this.submit(),
+			stop: () => this.stop(),
+		});
 		// The first session reports the model list, with versions and effort levels.
 		this.registerEvent(
 			this.plugin.catalogue.onChanged(() => {
@@ -191,19 +187,7 @@ export class ChatView extends ItemView {
 				this.renderEffortOptions();
 			}),
 		);
-		this.modeEl = toolbar.createEl("select", { cls: "dropdown apollo-mode", attr: { "aria-label": "Permission mode" } });
 		this.renderModeOptions();
-		this.registerDomEvent(this.modeEl, "change", () => void this.changeMode(this.modeEl.value as PermissionMode));
-		// CTX-7.
-		const openNotes = toolbar.createDiv({ cls: "apollo-open-notes clickable-icon", attr: { "aria-label": "Add an open note" } });
-		setIcon(openNotes, "files");
-		this.registerDomEvent(openNotes, "click", (evt) => this.input.showOpenNotes(evt));
-		const buttons = toolbar.createDiv({ cls: "apollo-buttons" });
-		this.stopBtn = buttons.createEl("button", { text: "Stop" });
-		const sendBtn = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
-
-		this.registerDomEvent(sendBtn, "click", () => this.submit());
-		this.registerDomEvent(this.stopBtn, "click", () => this.stop());
 		// Double-click the view header's title to rename the chat in place.
 		const titleEl = viewTitleEl(this);
 		if (titleEl) this.registerDomEvent(titleEl, "dblclick", () => this.editTitle(titleEl));
@@ -546,30 +530,15 @@ export class ChatView extends ItemView {
 	}
 
 	private renderModelOptions(): void {
-		const current = this.session.model;
-		this.modelEl.empty();
-		for (const [value, text] of Object.entries(modelOptions(this.plugin.catalogue.models, current))) this.modelEl.createEl("option", { value, text });
-		this.modelEl.value = orDefault(current);
+		this.toolbar.renderModel(this.plugin.catalogue.models, this.session.model);
 	}
 
-	/** Hidden for a model without effort levels. */
 	private renderEffortOptions(): void {
-		const current = this.session.effort;
-		const options = effortOptions(this.plugin.catalogue.models, this.session.model, current);
-		this.effortEl.empty();
-		for (const [value, text] of Object.entries(options)) this.effortEl.createEl("option", { value, text: `${text} effort` });
-		this.effortEl.value = orDefault(current);
-		this.effortEl.toggle(Object.keys(options).length > 0);
+		this.toolbar.renderEffort(this.plugin.catalogue.models, this.session.model, this.session.effort);
 	}
 
 	private renderModeOptions(): void {
-		this.modeEl.empty();
-		const modes: Record<string, string> = { ...PERMISSION_MODES };
-		// Show modes the plugin doesn't offer (e.g. from settings) rather than misreporting them.
-		const current = this.session.permissionMode;
-		if (!(current in modes)) modes[current] = current;
-		for (const [value, text] of Object.entries(modes)) this.modeEl.createEl("option", { value, text });
-		this.modeEl.value = current;
+		this.toolbar.renderMode(this.session.permissionMode);
 	}
 
 	private onSessionError(err: unknown): void {
@@ -1124,7 +1093,7 @@ export class ChatView extends ItemView {
 		const style = this.reportedOutputStyle ?? this.session.outputStyle;
 		lines.push(`Output style: ${style && style !== "default" ? style : "none"}`);
 		if (id) lines.push(`Session: ${id.slice(0, 8)}`, this.session.running ? "Claude Code is running." : "Claude Code starts on your next message.", "Click to copy the full session ID.");
-		setTooltip(this.infoEl, lines.join("\n"), { placement: "top" });
+		this.toolbar.setInfo(lines);
 	}
 
 	private copySessionId(): void {
@@ -1149,7 +1118,7 @@ export class ChatView extends ItemView {
 		this.status = status;
 		this.contentEl.dataset.status = status;
 		tabHeaderEl(this.leaf)?.setAttr("data-apollo-status", status);
-		this.stopBtn.disabled = status === "idle" || status === "error";
+		this.toolbar.setStopEnabled(status !== "idle" && status !== "error");
 		if (status === "idle" || status === "error") this.progress.idle();
 		// Finished while you were looking elsewhere: the tab keeps a dot until you look.
 		if (status === "running") this.setUnseen(false);
