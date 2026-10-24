@@ -19,6 +19,7 @@ import { parseApolloCommand } from "./apollo-commands";
 import { newChatConfig, type ChatConfig, effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
 import { contentBlocks, displayPrompt, INTERRUPTED, resultText, taskNotification } from "./transcript-history";
 import type { ThinkingBlock } from "./thinking";
+import { TranscriptScroller } from "./transcript-scroll";
 import { WorkSection } from "./work";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
@@ -47,11 +48,6 @@ const BACKGROUND_AGENT = "Async agent launched";
 export const NEW_CHAT_TITLE = "New chat";
 const TITLE_LENGTH = 50;
 
-/** Pixels from the bottom that still count as being at the end. */
-const STICKY_SCROLL = 40;
-/** Room above a message scrolled to the top of the transcript. */
-const ANCHOR_MARGIN = 8;
-
 /**
  * One chat per leaf. Messages go to a long-lived Claude Code process; while a
  * turn runs, further messages queue here and go out together when it ends.
@@ -70,14 +66,6 @@ export class ChatView extends ItemView {
 	private status: Status = "idle";
 	/** The chat finished while you were looking elsewhere; its tab shows a dot until you look. */
 	private unseen = false;
-	/** New output keeps the end of the transcript in view. Only the user's own scrolling clears it. */
-	private pinned = true;
-	/** scrollTop at the last scroll event, or the last one set here, to tell your scrolling from content changing. */
-	private lastScrollTop = 0;
-	/** The message you sent last. It's scrolled to the top so its reply reads from the start, and output doesn't push it away. */
-	private anchor: HTMLElement | null = null;
-	/** Padding below the transcript that lets `anchor` reach the top while the reply is shorter than the view. */
-	private spacer = 0;
 	/** This chat shows or hides thinking and tool calls regardless of the setting, or null to follow it. */
 	private workOverride: boolean | null = null;
 	/** Work sections open as they're added, after the brain icon or the status row showed them, until they're hidden again. */
@@ -89,6 +77,7 @@ export class ChatView extends ItemView {
 	private modeEl!: HTMLSelectElement;
 	/** Scrolls the transcript and the status row after it. */
 	private scrollEl!: HTMLElement;
+	private scroller!: TranscriptScroller;
 	private transcriptEl!: HTMLElement;
 	private progress!: ProgressLine;
 	private input!: ChatInput;
@@ -154,8 +143,7 @@ export class ChatView extends ItemView {
 			onVaultConfigChanged(this.app, (key) => {
 				if (key !== "readableLineLength") return;
 				this.applyReadableWidth();
-				this.updateSpacer();
-				if (this.pinned) this.scrollToEnd();
+				this.scroller.follow();
 			}),
 		);
 
@@ -169,21 +157,9 @@ export class ChatView extends ItemView {
 		});
 		// Double-clicking it shows or hides thinking and tool calls, expanded, like a message's brain icon (RND-10).
 		this.registerDomEvent(this.progress.el, "dblclick", () => this.setShowWork(!this.showWork, this.progress.el, true));
-		this.registerDomEvent(this.scrollEl, "scroll", () => this.onScroll());
-		// Output often grows after it's added (Markdown rendering, tool results), so follow every change while pinned.
-		const follow = () => {
-			this.updateSpacer();
-			if (this.pinned) this.scrollToEnd();
-		};
-		const mutations = new MutationObserver(follow);
-		mutations.observe(this.scrollEl, { childList: true, subtree: true, characterData: true });
-		// The input growing and pane resizes shrink the transcript.
-		const resizes = new ResizeObserver(follow);
-		resizes.observe(this.scrollEl);
-		this.register(() => {
-			mutations.disconnect();
-			resizes.disconnect();
-		});
+		this.scroller = new TranscriptScroller(this.scrollEl, () => this.app.workspace.requestSaveLayout());
+		this.registerDomEvent(this.scrollEl, "scroll", () => this.scroller.onScroll());
+		this.register(() => this.scroller.dispose());
 
 		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
 		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
@@ -252,7 +228,7 @@ export class ChatView extends ItemView {
 			sessionId: this.sessionId,
 			title: this.title,
 			draft: this.input?.value ?? "",
-			scroll: this.scrollEl && !this.pinned ? this.scrollEl.scrollTop : null,
+			scroll: this.scroller?.position ?? null,
 			mode: this.session?.permissionMode ?? this.plugin.settings.defaultPermissionMode,
 			model: this.session?.model ?? null,
 			effort: this.session?.effort ?? null,
@@ -351,15 +327,15 @@ export class ChatView extends ItemView {
 	 * jump; otherwise a pinned transcript stays at its end.
 	 */
 	applyShowWork(anchor?: HTMLElement): void {
-		const before = anchor?.getBoundingClientRect().top;
-		this.contentEl.toggleClass("apollo-hide-work", !this.showWork);
-		for (const el of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
-		this.updateSpacer();
-		if (anchor && before !== undefined) {
-			this.setScrollTop(this.scrollEl.scrollTop + anchor.getBoundingClientRect().top - before);
-			this.pinned = this.isNearEnd();
-		} else if (this.pinned) {
-			this.scrollToEnd();
+		const change = () => {
+			this.contentEl.toggleClass("apollo-hide-work", !this.showWork);
+			for (const el of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
+		};
+		if (anchor) {
+			this.scroller.keepInPlace(anchor, change);
+		} else {
+			change();
+			this.scroller.follow();
 		}
 	}
 
@@ -413,11 +389,7 @@ export class ChatView extends ItemView {
 		if (!messages.length) this.note("No messages found for this session. It may have been deleted.");
 		await this.renderHistory(messages);
 		if (session !== this.session) return;
-		if (scroll == null) this.scrollToEnd();
-		else {
-			this.setScrollTop(scroll);
-			this.pinned = this.isNearEnd();
-		}
+		this.scroller.restore(scroll);
 		void this.refreshTitle();
 	}
 
@@ -460,10 +432,7 @@ export class ChatView extends ItemView {
 		this.agentCalls.clear();
 		this.progress.idle();
 		this.transcriptEl.empty();
-		this.pinned = true;
-		this.lastScrollTop = 0;
-		this.anchor = null;
-		this.updateSpacer();
+		this.scroller.reset();
 		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
 		this.setTitle(title || NEW_CHAT_TITLE);
 		this.updateInfo();
@@ -488,7 +457,7 @@ export class ChatView extends ItemView {
 			this.queued.push({ text, el });
 			return;
 		}
-		this.scrollToTop(el);
+		this.scroller.anchorAtTop(el);
 		void this.send(text, [el]);
 	}
 
@@ -536,7 +505,7 @@ export class ChatView extends ItemView {
 				{ toolName, input, options, autoMode: this.session.permissionMode === "auto" },
 			);
 			// A card needs an answer, so always bring it into view, without following the output after it.
-			this.setScrollTop(this.scrollEl.scrollHeight);
+			this.scroller.revealEnd();
 			const result = await decision;
 			// The answered card dropped its buttons and fields; give the caret back to the input.
 			if (this.hasFocus()) this.input.focus();
@@ -749,7 +718,7 @@ export class ChatView extends ItemView {
 			for (const q of this.queued) this.transcriptEl.appendChild(q.el).removeClass("is-queued");
 			const bubbles = this.queued.map((q) => q.el);
 			this.queued = [];
-			if (!this.pinned) this.scrollToTop(bubbles[0]!);
+			if (!this.scroller.following) this.scroller.anchorAtTop(bubbles[0]!);
 			void this.send(text, bubbles);
 		} else {
 			this.refreshStatus();
@@ -1199,73 +1168,6 @@ export class ChatView extends ItemView {
 	private setUnseen(unseen: boolean): void {
 		this.unseen = unseen;
 		tabHeaderEl(this.leaf)?.toggleAttribute("data-apollo-unseen", unseen);
-	}
-
-	/** At the end of the output, not in the room left below a message at the top. */
-	private isNearEnd(): boolean {
-		const el = this.scrollEl;
-		return !this.spacer && el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_SCROLL;
-	}
-
-	/** Shows the end of the transcript and keeps it in view as output arrives. */
-	private scrollToEnd(): void {
-		this.pinned = true;
-		this.setScrollTop(this.scrollEl.scrollHeight);
-	}
-
-	/**
-	 * Puts a message you sent at the top of the view (RND-11), so its reply reads from
-	 * the start as it streams in below. The view stays there until you scroll.
-	 */
-	private scrollToTop(el: HTMLElement): void {
-		this.anchor = el;
-		this.pinned = false;
-		this.updateSpacer();
-		this.setScrollTop(this.offsetOf(el) - ANCHOR_MARGIN);
-	}
-
-	/** Scrolls without the scroll event counting as yours. */
-	private setScrollTop(top: number): void {
-		this.scrollEl.scrollTop = top;
-		this.lastScrollTop = this.scrollEl.scrollTop;
-	}
-
-	/** Where `el` starts in the scrolled content. */
-	private offsetOf(el: HTMLElement): number {
-		return el.getBoundingClientRect().top - this.scrollEl.getBoundingClientRect().top + this.scrollEl.scrollTop;
-	}
-
-	/**
-	 * Sizes the room below the transcript so the anchored message can sit at
-	 * the top. It shrinks as the reply grows, so the content doesn't move, and
-	 * is gone once the reply fills the view.
-	 */
-	private updateSpacer(): void {
-		const el = this.scrollEl;
-		let room = 0;
-		if (this.anchor?.isConnected) {
-			const top = el.getBoundingClientRect().top - el.scrollTop;
-			let end = 0;
-			for (const child of Array.from(el.children)) end = Math.max(end, child.getBoundingClientRect().bottom - top);
-			room = Math.max(0, Math.ceil(this.offsetOf(this.anchor) - ANCHOR_MARGIN + el.clientHeight - end));
-		}
-		if (room === this.spacer) return;
-		this.spacer = room;
-		el.style.paddingBottom = room ? `${room}px` : "";
-	}
-
-	/**
-	 * Scrolling up unpins; reaching the end pins again. Content growing below
-	 * doesn't scroll, and content shrinking only moves the position to the end.
-	 */
-	private onScroll(): void {
-		const top = this.scrollEl.scrollTop;
-		if (top !== this.lastScrollTop) {
-			if (this.isNearEnd()) this.pinned = true;
-			else if (top < this.lastScrollTop) this.pinned = false;
-			this.lastScrollTop = top;
-		}
-		this.app.workspace.requestSaveLayout();
 	}
 }
 
