@@ -1,7 +1,12 @@
 import { TFile, WorkspaceTabs, resolveSubpath, type WorkspaceSplit, setIcon, setTooltip, type App, type EventRef, type WorkspaceLeaf } from "obsidian";
 import { plural } from "./format";
-import type { ApolloSettings } from "./settings";
-import type { PresentRequest } from "./vault-tools";
+import type { ApolloSettings, PresentPlacement } from "./settings";
+
+export interface PresentRequest {
+	heading?: string;
+	line?: number;
+	placement?: PresentPlacement;
+}
 
 /** Obsidian internals the public API doesn't expose. May be missing. */
 interface LeafInternals {
@@ -50,7 +55,7 @@ export class Presenter {
 	 */
 	async present(path: string, req: PresentRequest = {}): Promise<string> {
 		const file = this.app.vault.getFileByPath(path);
-		if (!(file instanceof TFile)) throw new Error(`No file at ${path} in the vault.`);
+		if (!file) throw new Error(`No file at ${path} in the vault.`);
 		this.seq++;
 		const max = this.settings().presentMaxPerTurn;
 		if (this.count >= max) {

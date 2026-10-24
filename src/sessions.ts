@@ -17,8 +17,6 @@ export interface SessionMeta {
 	forkedFrom: Record<string, string>;
 }
 
-export const DEFAULT_META: SessionMeta = { pinned: [], forkedFrom: {} };
-
 /**
  * The vault's Claude Code sessions. Every read and write goes through the
  * SDK against Claude Code's own transcripts, so the CLI sees the same

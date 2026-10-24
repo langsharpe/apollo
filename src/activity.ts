@@ -407,7 +407,7 @@ function vaultProgress(tool: string, kind: Kind, input: Record<string, unknown>,
 }
 
 /** One-line description of a tool call's input. */
-export function toolSummary(input: Record<string, unknown>, vaultPath: string, max = SUMMARY_LENGTH): string {
+function toolSummary(input: Record<string, unknown>, vaultPath: string, max = SUMMARY_LENGTH): string {
 	const value = ["file_path", "notebook_path", "path", "command", "pattern", "url", "query", "description", "skill"]
 		.map((key) => input[key])
 		.find((v): v is string => typeof v === "string");

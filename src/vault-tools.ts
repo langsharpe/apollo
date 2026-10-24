@@ -14,19 +14,12 @@ import {
 } from "obsidian";
 import { z } from "zod";
 import { errorMessage, plural } from "./format";
+import type { PresentRequest } from "./presenter";
 import { quotePath, vaultRelative } from "./references";
 
 /** The MCP server's name. Its tools reach Claude Code as `mcp__apollo__<tool>`. */
 export const VAULT_SERVER = "apollo";
 export const VAULT_TOOL_PREFIX = `mcp__${VAULT_SERVER}__`;
-
-export type PresentPlacementHint = "auto" | "beside" | "tab";
-
-export interface PresentRequest {
-	heading?: string;
-	line?: number;
-	placement?: PresentPlacementHint;
-}
 
 /** What the tools need from the chat that runs them. */
 export interface ToolHost {
