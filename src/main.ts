@@ -1,9 +1,10 @@
-import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type App, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
 import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, userPrompt, type ChatViewState } from "./chat-view";
 import type { ChatSession } from "./chat-session";
 import { errorMessage } from "./format";
 import { confirmAction, promptText } from "./modals";
+import { deferredHeader, menuSectionOrder, printHotkey, refreshTabHeader, setRibbonItemIcon, usedMenuSections } from "./obsidian-internals";
 
 import { formatSelection } from "./references";
 import { SESSION_LIST_VIEW_TYPE, SessionListView } from "./session-list-view";
@@ -250,8 +251,8 @@ export default class ApolloPlugin extends Plugin {
 	private addChatMenuItems(menu: Menu, files: TAbstractFile[]): void {
 		if (!files.length) return;
 		const what = files.length > 1 ? `${files.length} items` : "";
-		const { items, sections } = menu as Menu & MenuInternals;
-		const used = new Set(items?.map((i) => i.section));
+		const sections = menuSectionOrder(menu);
+		const used = usedMenuSections(menu);
 		const section = sections ? (["action-primary", "open", "close"].find((s) => sections.includes(s) && !used.has(s)) ?? "action") : "action";
 		menu.addItem((item) =>
 			item
@@ -354,7 +355,7 @@ export default class ApolloPlugin extends Plugin {
 	 */
 	private addEmptyTabActions(): void {
 		// The hotkey that does the same from here: a chat in this tab.
-		const hotkey = (this.app as App & AppInternals).hotkeyManager?.printHotkeyForCommand?.(`${this.manifest.id}:new-chat-in-current-pane`);
+		const hotkey = printHotkey(this.app, `${this.manifest.id}:new-chat-in-current-pane`);
 		for (const leaf of this.app.workspace.getLeavesOfType("empty")) {
 			const list = leaf.view.containerEl.querySelector<HTMLElement>(".empty-state-action-list");
 			if (!list) continue;
@@ -417,9 +418,7 @@ export default class ApolloPlugin extends Plugin {
 		if (this.ribbonEl) {
 			setIcon(this.ribbonEl, icon);
 			// The ribbon keeps its own copy for its menu and redraws; update it too.
-			const ribbon = this.app.workspace.leftRibbon as unknown as RibbonInternals;
-			const item = ribbon.items?.find((i) => i.buttonEl === this.ribbonEl);
-			if (item) item.icon = icon;
+			setRibbonItemIcon(this.app, this.ribbonEl, icon);
 		}
 		this.addEmptyTabActions();
 		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyIcon();
@@ -443,13 +442,13 @@ export default class ApolloPlugin extends Plugin {
 		let repaired = false;
 		for (const leaf of this.chatLeaves()) {
 			if (!leaf.isDeferred) continue;
-			const view = leaf.view as View & DeferredViewInternals;
+			const view = deferredHeader(leaf.view);
 			const saved = leaf.getViewState().state?.title;
 			const title = typeof saved === "string" && saved ? saved : NEW_CHAT_TITLE;
 			if (view.icon === undefined || (view.icon === this.settings.icon && view.title === title)) continue;
 			view.icon = this.settings.icon;
 			view.title = title;
-			(leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
+			refreshTabHeader(leaf);
 			repaired = true;
 		}
 		if (repaired) this.app.workspace.requestSaveLayout();
@@ -478,35 +477,6 @@ export default class ApolloPlugin extends Plugin {
 	private closeAll(): void {
 		for (const session of [...this.sessions]) session.close();
 	}
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface MenuInternals {
-	items?: { section?: string }[];
-	/** Section order, from `addSections`. */
-	sections?: string[];
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface AppInternals {
-	hotkeyManager?: { printHotkeyForCommand?(id: string): string };
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface RibbonInternals {
-	items?: { icon: string; buttonEl?: HTMLElement }[];
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface LeafInternals {
-	/** Refreshes the tab header's icon and title from the view, not the view header. */
-	updateHeader?(): void;
-}
-
-/** A deferred tab's stand-in view, which shows the icon and title saved with the layout. */
-interface DeferredViewInternals {
-	icon?: string;
-	title?: string;
 }
 
 /** The session a chat leaf shows. Works for deferred tabs, whose saved state stands in for the view. */

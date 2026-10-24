@@ -14,6 +14,7 @@ import {
 } from "obsidian";
 import { z } from "zod";
 import { errorMessage, plural } from "./format";
+import { cliHandler, communityPlugin, internalPlugin, vaultConfig } from "./obsidian-internals";
 import type { PresentRequest } from "./presenter";
 import { quotePath, vaultRelative } from "./references";
 
@@ -386,7 +387,7 @@ function toolDefinitions(host: ToolHost) {
 				const linking = files.linkingNotes(item);
 				const count = item instanceof TFolder ? countFiles(item) : 0;
 				await app.fileManager.trashFile(item);
-				const where = TRASH_TEXT[getConfig(app, "trashOption") as string] ?? "moved to the trash, per the Deleted files setting";
+				const where = TRASH_TEXT[vaultConfig(app, "trashOption") as string] ?? "moved to the trash, per the Deleted files setting";
 				const what = item instanceof TFolder ? `${quotePath(item.path)} (${plural(count, "file")})` : quotePath(item.path);
 				const links = linking.size ? ` ${plural(linking.size, "note")} linked to it; those links are now unresolved.` : "";
 				return text(`Trashed ${what}: ${where}.${links}`);
@@ -694,13 +695,6 @@ const momentFn = moment as unknown as (input?: string, format?: string, strict?:
 
 // Other plugins, reached through Obsidian internals. Each may be missing.
 
-interface AppInternals {
-	plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> };
-	internalPlugins?: { getEnabledPluginById?(id: string): unknown };
-	cli?: { handlers?: Map<string, { handler?(flags: Record<string, unknown>): Promise<unknown> }> };
-	vault: { getConfig?(key: string): unknown };
-}
-
 interface DataviewApi {
 	queryMarkdown(query: string, originFile?: string): Promise<{ successful: true; value: string } | { successful: false; error: string }>;
 }
@@ -720,13 +714,6 @@ interface DailyNotes {
 	getFolder?(): TFolder | null;
 }
 
-const internals = (app: App) => app as unknown as AppInternals;
-
-function communityPlugin<T>(app: App, id: string): T | null {
-	const plugins = internals(app).plugins;
-	return plugins?.enabledPlugins?.has(id) ? ((plugins.plugins?.[id] as T | undefined) ?? null) : null;
-}
-
 function dataviewApi(app: App): DataviewApi | null {
 	return communityPlugin<{ api?: DataviewApi }>(app, "dataview")?.api ?? null;
 }
@@ -737,20 +724,15 @@ function templater(app: App): Templater | null {
 }
 
 function coreTemplates(app: App): CoreTemplates | null {
-	return (internals(app).internalPlugins?.getEnabledPluginById?.("templates") as CoreTemplates | null) ?? null;
+	return internalPlugin<CoreTemplates>(app, "templates");
 }
 
 function dailyNotes(app: App): DailyNotes | null {
-	return (internals(app).internalPlugins?.getEnabledPluginById?.("daily-notes") as DailyNotes | null) ?? null;
+	return internalPlugin<DailyNotes>(app, "daily-notes");
 }
 
 /** Obsidian's own `base:query` CLI handler, the only way to evaluate a base outside its view. */
 function basesQuery(app: App): ((flags: Record<string, unknown>) => Promise<unknown>) | null {
-	if (!internals(app).internalPlugins?.getEnabledPluginById?.("bases")) return null;
-	const handler = internals(app).cli?.handlers?.get("base:query");
-	return handler?.handler ? (flags) => handler.handler!(flags) : null;
+	return internalPlugin(app, "bases") ? cliHandler(app, "base:query") : null;
 }
 
-function getConfig(app: App, key: string): unknown {
-	return internals(app).vault.getConfig?.(key);
-}

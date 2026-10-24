@@ -1,5 +1,5 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type EventRef, type TAbstractFile, type Vault, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { filePath, toolKind, type ActivityGroup, type Step } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
@@ -7,6 +7,7 @@ import { ChatSession } from "./chat-session";
 import { agentTotals, errorMessage, formatDuration, truncate } from "./format";
 import type ApolloPlugin from "./main";
 import { pickOne } from "./modals";
+import { onVaultConfigChanged, refreshTabHeader, tabHeaderEl, vaultConfig, viewTitleEl } from "./obsidian-internals";
 import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
 import { ProgressLine } from "./progress";
@@ -37,25 +38,6 @@ export interface ChatViewState {
 	outputStyle: string;
 	/** Thinking and tool calls show in the transcript, or null to follow the setting. */
 	showWork: boolean | null;
-}
-
-/** Obsidian internals the public API doesn't expose. All may be missing. */
-interface LeafInternals {
-	tabHeaderEl?: HTMLElement;
-	/** Refreshes the tab header's icon and title from the view, not the view header. */
-	updateHeader?(): void;
-}
-
-interface ViewInternals {
-	/** The view header's title. */
-	titleEl?: HTMLElement;
-}
-
-interface VaultInternals {
-	/** Values from `.obsidian/app.json`, such as `readableLineLength`. */
-	getConfig?(key: string): unknown;
-	/** Fires with the key after a setting changes. */
-	on(name: "config-changed", callback: (key: string) => unknown): EventRef;
 }
 
 /** What an Agent call returns when the agent goes to the background. */
@@ -154,7 +136,7 @@ export class ChatView extends ItemView {
 
 	/** Shows the icon setting's new value on the tab and the presentation pane's marker. */
 	applyIcon(): void {
-		(this.leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
+		refreshTabHeader(this.leaf);
 		this.presenter.applyIcon();
 	}
 
@@ -170,7 +152,7 @@ export class ChatView extends ItemView {
 		this.applyReadableWidth();
 		// Notes follow the setting as soon as it changes, so chats do too.
 		this.registerEvent(
-			(this.app.vault as Vault & VaultInternals).on("config-changed", (key) => {
+			onVaultConfigChanged(this.app, (key) => {
 				if (key !== "readableLineLength") return;
 				this.applyReadableWidth();
 				this.updateSpacer();
@@ -248,7 +230,7 @@ export class ChatView extends ItemView {
 		this.registerDomEvent(sendBtn, "click", () => this.submit());
 		this.registerDomEvent(this.stopBtn, "click", () => this.stop());
 		// Double-click the view header's title to rename the chat in place.
-		const titleEl = (this as ViewInternals).titleEl;
+		const titleEl = viewTitleEl(this);
 		if (titleEl) this.registerDomEvent(titleEl, "dblclick", () => this.editTitle(titleEl));
 		// Renames, from here or the chat list, and Claude Code's own titles.
 		this.registerEvent(this.plugin.store.onChanged(() => void this.refreshTitle()));
@@ -361,7 +343,7 @@ export class ChatView extends ItemView {
 	 * than that, such as a chat tab in the main area.
 	 */
 	private applyReadableWidth(): void {
-		const readable = (this.app.vault as Vault & VaultInternals).getConfig?.("readableLineLength");
+		const readable = vaultConfig(this.app, "readableLineLength");
 		this.contentEl.toggleClass("apollo-readable-width", readable !== false);
 	}
 
@@ -1136,8 +1118,8 @@ export class ChatView extends ItemView {
 	private setTitle(title: string): void {
 		if (title === this.title) return;
 		this.title = title;
-		(this.leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
-		const titleEl = (this as ViewInternals).titleEl;
+		refreshTabHeader(this.leaf);
+		const titleEl = viewTitleEl(this);
 		// Leave a title being edited alone; it picks up the latest when editing ends.
 		if (titleEl && !titleEl.isContentEditable) titleEl.setText(title);
 		this.app.workspace.requestSaveLayout();
@@ -1207,7 +1189,7 @@ export class ChatView extends ItemView {
 		const was = this.status;
 		this.status = status;
 		this.contentEl.dataset.status = status;
-		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.setAttr("data-apollo-status", status);
+		tabHeaderEl(this.leaf)?.setAttr("data-apollo-status", status);
 		this.stopBtn.disabled = status === "idle" || status === "error";
 		if (status === "idle" || status === "error") this.progress.idle();
 		// Finished while you were looking elsewhere: the tab keeps a dot until you look.
@@ -1226,7 +1208,7 @@ export class ChatView extends ItemView {
 
 	private setUnseen(unseen: boolean): void {
 		this.unseen = unseen;
-		(this.leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl?.toggleAttribute("data-apollo-unseen", unseen);
+		tabHeaderEl(this.leaf)?.toggleAttribute("data-apollo-unseen", unseen);
 	}
 
 	/** At the end of the output, not in the room left below a message at the top. */

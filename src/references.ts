@@ -1,4 +1,5 @@
 import { Keymap, TFile, TFolder, normalizePath, setIcon, type App, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { internalPlugin } from "./obsidian-internals";
 import type { ReferenceFormat } from "./settings";
 
 /** A file or folder reference found in text. */
@@ -152,17 +153,13 @@ function noteLeaf(app: App, from?: WorkspaceLeaf): WorkspaceLeaf {
 	return from ? workspace.createLeafBySplit(from, "vertical") : workspace.getLeaf("tab");
 }
 
-interface FileExplorerInternals {
+interface FileExplorer {
 	revealInFolder?(file: TAbstractFile): void;
-}
-
-interface AppInternals {
-	internalPlugins?: { getEnabledPluginById?(id: string): FileExplorerInternals | null };
 }
 
 /** Shows a folder in the file explorer. Uses an Obsidian internal; does nothing without it. */
 function revealFolder(app: App, folder: TFolder): void {
-	(app as App & AppInternals).internalPlugins?.getEnabledPluginById?.("file-explorer")?.revealInFolder?.(folder);
+	internalPlugin<FileExplorer>(app, "file-explorer")?.revealInFolder?.(folder);
 }
 
 /** A clickable reference chip, for sent messages (CTX-9) and output (CTX-10). */

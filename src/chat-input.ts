@@ -4,6 +4,7 @@ import { sourceLabel, type CatalogueEntry } from "./catalogue";
 import { truncate } from "./format";
 import { InputMenu, type ChooseHow, type MenuRow } from "./input-menu";
 import type ApolloPlugin from "./main";
+import { draggedItem } from "./obsidian-internals";
 import { findReferences, formatReference, isAbsolutePath, vaultRelative } from "./references";
 
 export interface ChatInputHandlers {
@@ -11,19 +12,6 @@ export interface ChatInputHandlers {
 	/** Escape with no menu open. Returns true if it was used. */
 	escape(): boolean;
 	changed(): void;
-}
-
-/** Obsidian internals the public API doesn't expose. All may be missing. */
-interface AppInternals {
-	dragManager?: {
-		draggable?: {
-			type?: string;
-			file?: TAbstractFile;
-			files?: TAbstractFile[];
-			linktext?: string;
-			sourcePath?: string;
-		} | null;
-	};
 }
 
 type Token = { kind: "slash" | "file"; from: number; query: string };
@@ -381,7 +369,7 @@ export class ChatInput {
 	private onDragOver(evt: DragEvent): void {
 		const dt = evt.dataTransfer;
 		if (!dt) return;
-		if (!this.draggable() && !dt.types.includes("Files") && !dt.types.includes("text/plain")) return;
+		if (!draggedItem(this.app) && !dt.types.includes("Files") && !dt.types.includes("text/plain")) return;
 		// Keep Obsidian's workspace from treating this as a drop onto the pane.
 		evt.preventDefault();
 		evt.stopPropagation();
@@ -402,13 +390,9 @@ export class ChatInput {
 		}
 	}
 
-	private draggable() {
-		return (this.app as App & AppInternals).dragManager?.draggable ?? null;
-	}
-
 	private droppedFiles(evt: DragEvent): { vault: TAbstractFile[]; outside: string[] } {
 		const { vault, metadataCache } = this.app;
-		const drag = this.draggable();
+		const drag = draggedItem(this.app);
 		if (drag) {
 			if ((drag.type === "file" || drag.type === "folder") && drag.file) return { vault: [drag.file], outside: [] };
 			if (drag.type === "files" && drag.files) return { vault: drag.files, outside: [] };

@@ -38,6 +38,7 @@ Probe scripts in `scripts/` check SDK and Claude Code behaviour outside Obsidian
 - **`sessions.ts`**, `SessionStore`: every session read and write goes through the SDK (`listSessions`, `getSessionMessages`, `forkSession`, `renameSession`, `deleteSession`) against Claude Code's own transcripts in `~/.claude/projects/`. Apollo stores no transcripts or titles, which is what keeps `claude --resume` in sync. `session-list-view.ts` is the sidebar list.
 - **Transcript rendering**: `work.ts` (`WorkSection`, the collapsed run of thinking and tool calls between messages) contains `thinking.ts` blocks and `activity.ts` groups of tool calls (summaries, file links, change summaries). `progress.ts` is the status row at the end of the transcript, fed by `tasks.ts` (`AgentTasks`, subagents tracked from task events). `permission-card.ts` renders inline approval and AskUserQuestion cards, using `diff.ts`.
 - **Input**: `chat-input.ts` (textarea, `@` picker, drag and drop, path paste), `input-menu.ts` (shared floating suggestion list that never takes focus), `catalogue.ts` (slash-menu entries scanned from `.claude/skills`, `.claude/commands`, `~/.claude` and plugins, then reconciled with what Claude Code reports), `references.ts` (formatting, finding and linkifying vault paths).
+- **`obsidian-internals.ts`**: every non-public Obsidian API (leaf `tabHeaderEl`/`updateHeader`, `vault.getConfig`, `hotkeyManager`, `dragManager`, internal and community plugins, menu and ribbon internals) as optional types behind small accessors. Check this file first when Obsidian updates.
 - **`format.ts`**: small text helpers shared by views and tools (`errorMessage`, `plural`, `truncate`, `formatDuration`, `agentTotals`).
 - **Obsidian tools**: `vault-tools.ts` builds an in-process SDK MCP server named `apollo` (tools reach Claude as `mcp__apollo__<tool>`) on Obsidian's API. Read-only tools go in `allowedTools`; the rest follow the permission mode. `presenter.ts` handles `workspace_present`, reusing one marked pane per chat.
 
@@ -54,6 +55,6 @@ Aborting can end the SDK stream quietly instead of throwing, so check `signal.ab
 ## Conventions
 
 - Tabs for indentation (`.editorconfig`). Doc comments explain why, and cite spec IDs.
-- Use Obsidian's public API where possible. Internals are typed as optional (`AppInternals`, `LeafInternals`) and must tolerate being missing.
+- Use Obsidian's public API where possible. Internals live in `obsidian-internals.ts`, typed as optional, and must tolerate being missing.
 - User-facing behaviour is documented in `README.md` (Usage). Update it, and `spec.md` when requirements change, in the same commit as the feature.
 - Releases bump the version in `manifest.json`, `package.json`, `package-lock.json` and add an entry to `versions.json` (commit "Release x.y.z").

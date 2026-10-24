@@ -1,18 +1,12 @@
 import { TFile, WorkspaceTabs, resolveSubpath, type WorkspaceSplit, setIcon, setTooltip, type App, type EventRef, type WorkspaceLeaf } from "obsidian";
 import { plural } from "./format";
+import { indexInTabGroup, leafActiveTime, tabHeaderEl } from "./obsidian-internals";
 import type { ApolloSettings, PresentPlacement } from "./settings";
 
 export interface PresentRequest {
 	heading?: string;
 	line?: number;
 	placement?: PresentPlacement;
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface LeafInternals {
-	tabHeaderEl?: HTMLElement;
-	/** When the leaf was last active, in ms. */
-	activeTime?: number;
 }
 
 /**
@@ -188,7 +182,7 @@ export class Presenter {
 			if (leaf.getViewState().type !== "markdown" || leaf.getViewState().pinned) return;
 			if (!(leaf.parent instanceof WorkspaceTabs)) return;
 			if (!this.inSidebar() && leaf.parent === this.chatLeaf.parent) return;
-			const time = (leaf as WorkspaceLeaf & LeafInternals).activeTime ?? 0;
+			const time = leafActiveTime(leaf);
 			if (time > bestTime) {
 				best = leaf;
 				bestTime = time;
@@ -211,9 +205,9 @@ export class Presenter {
 
 	/** A new tab right after `leaf`, in its tab group. */
 	private tabAfter(leaf: WorkspaceLeaf): WorkspaceLeaf {
-		// The public signature asks for a split, but a tab group works, and `children` is internal.
-		const group = leaf.parent as unknown as WorkspaceSplit & { children?: unknown[] };
-		const index = group.children?.indexOf(leaf) ?? -1;
+		// The public signature asks for a split, but a tab group works.
+		const group = leaf.parent as unknown as WorkspaceSplit;
+		const index = indexInTabGroup(group, leaf);
 		return this.app.workspace.createLeafInParent(group, index === -1 ? 0 : index + 1);
 	}
 
@@ -229,12 +223,12 @@ export class Presenter {
 		this.pinnedRef = null;
 		this.marker?.remove();
 		this.marker = null;
-		if (this.pane) tabHeader(this.pane)?.removeClass("apollo-presentation");
+		if (this.pane) tabHeaderEl(this.pane)?.removeClass("apollo-presentation");
 		this.pane = leaf;
 		if (!leaf) return;
 		// Pinning takes the pane out of reuse.
 		this.pinnedRef = leaf.on("pinned-change", (pinned) => pinned && this.setPane(null));
-		const header = tabHeader(leaf);
+		const header = tabHeaderEl(leaf);
 		if (!header) return;
 		header.addClass("apollo-presentation");
 		this.marker = createSpan({ cls: "apollo-presentation-marker" });
@@ -244,8 +238,4 @@ export class Presenter {
 		if (title) title.after(this.marker);
 		else header.appendChild(this.marker);
 	}
-}
-
-function tabHeader(leaf: WorkspaceLeaf): HTMLElement | undefined {
-	return (leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl;
 }
