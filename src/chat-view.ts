@@ -1,6 +1,7 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { filePath, toolKind, type ActivityGroup, type Step } from "./activity";
+import type { ActivityGroup } from "./activity";
+import { filePath, toolKind, type Step } from "./tool-calls";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";

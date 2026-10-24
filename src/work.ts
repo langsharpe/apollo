@@ -1,5 +1,7 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, setOpen, summariseCalls, type Step } from "./activity";
+import { ActivityGroup, addChange, FileLinks } from "./activity";
+import { createToggleHeader, setOpen } from "./collapsible";
+import { callsCount, summariseCalls, type Step } from "./tool-calls";
 import { ThinkingBlock } from "./thinking";
 
 /**

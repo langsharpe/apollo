@@ -1,4 +1,4 @@
-import { createToggleHeader } from "./activity";
+import { createToggleHeader } from "./collapsible";
 
 /**
  * A block of Claude's thinking, as one collapsed "Thought" row (RND-6).

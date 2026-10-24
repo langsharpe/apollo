@@ -1,6 +1,6 @@
 import type { SDKAPIRetryMessage } from "@anthropic-ai/claude-agent-sdk";
 import { setIcon, type Component } from "obsidian";
-import type { Step } from "./activity";
+import type { Step } from "./tool-calls";
 import { formatDuration, plural } from "./format";
 import type { AgentTask } from "./tasks";
 
