@@ -1,6 +1,7 @@
 import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
-import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, userPrompt, type ChatViewState } from "./chat-view";
+import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, type ChatViewState } from "./chat-view";
+import { userPrompt } from "./transcript-history";
 import type { ChatSession } from "./chat-session";
 import { errorMessage } from "./format";
 import { confirmAction, promptText } from "./modals";

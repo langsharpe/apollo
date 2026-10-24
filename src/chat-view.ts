@@ -17,6 +17,7 @@ import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from
 import { sessionTitle } from "./sessions";
 import { parseApolloCommand } from "./apollo-commands";
 import { newChatConfig, type ChatConfig, effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
+import { contentBlocks, displayPrompt, INTERRUPTED, resultText, taskNotification } from "./transcript-history";
 import type { ThinkingBlock } from "./thinking";
 import { WorkSection } from "./work";
 
@@ -760,8 +761,7 @@ export class ChatView extends ItemView {
 		const renders: Promise<void>[] = [];
 		for (const msg of messages) {
 			if (msg.parent_tool_use_id) continue;
-			const content = (msg.message as { content?: unknown } | null)?.content;
-			const blocks: HistoryBlock[] = typeof content === "string" ? [{ type: "text", text: content }] : Array.isArray(content) ? content : [];
+			const blocks = contentBlocks(msg.message);
 			if (msg.type === "user") {
 				const texts: string[] = [];
 				for (const block of blocks) {
@@ -1267,65 +1267,6 @@ export class ChatView extends ItemView {
 		}
 		this.app.workspace.requestSaveLayout();
 	}
-}
-
-/** Content blocks as stored in transcripts, loosely typed. */
-interface HistoryBlock {
-	type: string;
-	text?: string;
-	thinking?: string;
-	id?: string;
-	name?: string;
-	input?: Record<string, unknown>;
-	tool_use_id?: string;
-	is_error?: boolean;
-	content?: unknown;
-}
-
-/** A tool result's text, from either a string or text blocks. */
-function resultText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return (content as { type?: string; text?: string }[])
-		.filter((b) => b.type === "text" && typeof b.text === "string")
-		.map((b) => b.text!)
-		.join("\n");
-}
-
-const INTERRUPTED = "[Request interrupted by user]";
-
-/**
- * A user entry's text as the user would recognise it. Claude Code stores
- * slash commands as tags and adds reminders and command output as user
- * entries; those aren't prompts, so they return "".
- */
-function displayPrompt(text: string): string {
-	const stripped = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
-	if (stripped.startsWith(INTERRUPTED)) return INTERRUPTED;
-	const command = /<command-name>([^<]*)<\/command-name>/.exec(stripped);
-	if (command) {
-		const args = /<command-args>([^<]*)<\/command-args>/.exec(stripped)?.[1]?.trim();
-		const name = command[1]!.trim();
-		return `${name.startsWith("/") ? name : `/${name}`}${args ? ` ${args}` : ""}`;
-	}
-	if (/^<(local-command-\w+|command-message|bash-\w+|task-notification)>/.test(stripped) || stripped.startsWith("Caveat: The messages below")) return "";
-	return stripped;
-}
-
-/** A background task's report, which Claude Code stores as a user entry; null for anything else. */
-function taskNotification(text: string): { toolUseId: string; status: string; totals: string } | null {
-	if (!text.trimStart().startsWith("<task-notification>")) return null;
-	const tag = (name: string) => new RegExp(`<${name}>([^<]*)</${name}>`).exec(text)?.[1]?.trim() ?? "";
-	return { toolUseId: tag("tool-use-id"), status: tag("status"), totals: agentTotals(Number(tag("tool_uses")) || 0, Number(tag("duration_ms")) || 0) };
-}
-
-/** A transcript user message's prompt text, or "" if it isn't a prompt. */
-export function userPrompt(message: unknown): string {
-	const content = (message as { content?: unknown } | null)?.content;
-	if (typeof content === "string") return displayPrompt(content);
-	if (!Array.isArray(content)) return "";
-	const texts = (content as HistoryBlock[]).filter((b) => b.type === "text" && b.text).map((b) => b.text!);
-	return displayPrompt(texts.join("\n\n"));
 }
 
 /** First line of a prompt, short enough for a tab title. */
