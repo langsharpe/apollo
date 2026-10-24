@@ -2,7 +2,9 @@ import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIc
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
 import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, userPrompt, type ChatViewState } from "./chat-view";
 import type { ChatSession } from "./chat-session";
+import { errorMessage } from "./format";
 import { confirmAction, promptText } from "./modals";
+
 import { formatSelection } from "./references";
 import { SESSION_LIST_VIEW_TYPE, SessionListView } from "./session-list-view";
 import { SessionStore, type SessionMeta } from "./sessions";
@@ -297,7 +299,7 @@ export default class ApolloPlugin extends Plugin {
 			const forkId = await this.store.fork(sessionId, upTo);
 			await this.openChat({ sessionId: forkId, draft });
 		} catch (err) {
-			new Notice(`Couldn't fork this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't fork this chat: ${errorMessage(err)}`);
 		}
 	}
 
@@ -312,7 +314,7 @@ export default class ApolloPlugin extends Plugin {
 		try {
 			await this.store.rename(sessionId, title);
 		} catch (err) {
-			new Notice(`Couldn't rename this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't rename this chat: ${errorMessage(err)}`);
 		}
 	}
 
@@ -328,7 +330,7 @@ export default class ApolloPlugin extends Plugin {
 		try {
 			await this.store.delete(sessionId);
 		} catch (err) {
-			new Notice(`Couldn't delete this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't delete this chat: ${errorMessage(err)}`);
 		}
 	}
 

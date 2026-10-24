@@ -1,4 +1,5 @@
 import { setIcon, setTooltip, type App } from "obsidian";
+import { plural, truncate } from "./format";
 import { createReferenceEl, linkifyPaths, resolve } from "./references";
 import { VAULT_TOOL_PREFIX } from "./vault-tools";
 import type { WorkSection } from "./work";
@@ -125,7 +126,7 @@ export function addChange(parent: HTMLElement, text: string, app: App, vaultPath
 
 /** "3 tools", or "" for none. Failures aren't counted: Claude usually just tries something else. */
 export function callsCount(calls: Call[]): string {
-	return calls.length ? plural(calls.length, "tool", "tools") : "";
+	return calls.length ? plural(calls.length, "tool") : "";
 }
 
 /**
@@ -228,7 +229,7 @@ export class ActivityGroup {
 		// Between tool calls Claude Code repeats the task's description, which says nothing new.
 		if (!call || call.state !== "pending" || !activity || activity === description) return;
 		call.progress = `Agent: ${activity}`;
-		if (toolUses) this.setDetail(call, plural(toolUses, "tool", "tools"));
+		if (toolUses) this.setDetail(call, plural(toolUses, "tool"));
 	}
 
 	/** An agent finished, failed or was stopped. `detail` is its totals: "5 tools · 30s". */
@@ -324,43 +325,25 @@ export function summarise(calls: Call[], thought = false): string {
 	const files = (kind: Kind) => new Set(calls.filter((c) => c.kind === kind).map((c, i) => c.path ?? i)).size;
 	const parts: string[] = [];
 	const add = (n: number, text: (n: number) => string) => n && parts.push(text(n));
-	add(files("read"), (n) => `read ${plural(n, "file", "files")}`);
-	add(files("edit"), (n) => `edited ${plural(n, "file", "files")}`);
-	add(files("inspect"), (n) => `looked at ${plural(n, "note", "notes")}`);
-	add(count("move"), (n) => `moved ${plural(n, "item", "items")}`);
-	add(count("trash"), (n) => `trashed ${plural(n, "item", "items")}`);
+	add(files("read"), (n) => `read ${plural(n, "file")}`);
+	add(files("edit"), (n) => `edited ${plural(n, "file")}`);
+	add(files("inspect"), (n) => `looked at ${plural(n, "note")}`);
+	add(count("move"), (n) => `moved ${plural(n, "item")}`);
+	add(count("trash"), (n) => `trashed ${plural(n, "item")}`);
 	add(count("search"), (n) => plural(n, "search", "searches"));
-	add(count("present"), (n) => `showed ${plural(n, "note", "notes")}`);
-	add(count("command"), (n) => `ran ${plural(n, "command", "commands")}`);
-	add(count("fetch"), (n) => `fetched ${plural(n, "page", "pages")}`);
+	add(count("present"), (n) => `showed ${plural(n, "note")}`);
+	add(count("command"), (n) => `ran ${plural(n, "command")}`);
+	add(count("fetch"), (n) => `fetched ${plural(n, "page")}`);
 	add(count("web"), (n) => plural(n, "web search", "web searches"));
 	// An agent can run on long after its turn, so the summary says so rather than "ran".
 	const agents = calls.filter((c) => c.kind === "agent");
 	const running = agents.filter((c) => c.state === "pending").length;
-	add(agents.length - running, (n) => `ran ${plural(n, "agent", "agents")}`);
-	add(running, (n) => `running ${plural(n, "agent", "agents")}`);
+	add(agents.length - running, (n) => `ran ${plural(n, "agent")}`);
+	add(running, (n) => `running ${plural(n, "agent")}`);
 	add(count("other"), (n) => `used ${plural(n, parts.length ? "other tool" : "tool", parts.length ? "other tools" : "tools")}`);
 	if (thought) parts.unshift("thought");
 	const text = parts.join(", ");
 	return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-function plural(n: number, one: string, many: string): string {
-	return `${n} ${n === 1 ? one : many}`;
-}
-
-/** "12s", "1m 05s" or "1h 02m". */
-export function formatDuration(ms: number): string {
-	const secs = Math.max(0, Math.floor(ms / 1000));
-	if (secs < 60) return `${secs}s`;
-	const mins = Math.floor(secs / 60);
-	if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, "0")}s`;
-	return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m`;
-}
-
-/** An agent's totals: "5 tools · 30s". */
-export function agentTotals(toolUses: number, durationMs: number): string {
-	return [toolUses ? plural(toolUses, "tool", "tools") : "", durationMs ? formatDuration(durationMs) : ""].filter(Boolean).join(" · ");
 }
 
 /** "Reading notes/a.md": what a running call is doing. */
@@ -435,5 +418,5 @@ export function toolSummary(input: Record<string, unknown>, vaultPath: string, m
 function shorten(value: string, vaultPath: string, max: number): string {
 	const prefix = vaultPath.endsWith("/") ? vaultPath : `${vaultPath}/`;
 	const text = (value.startsWith(prefix) ? value.slice(prefix.length) : value).replace(/\s*\n\s*/g, " ");
-	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+	return truncate(text, max);
 }

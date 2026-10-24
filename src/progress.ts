@@ -1,6 +1,7 @@
 import type { SDKAPIRetryMessage } from "@anthropic-ai/claude-agent-sdk";
 import { setIcon, type Component } from "obsidian";
-import { formatDuration, type Step } from "./activity";
+import type { Step } from "./activity";
+import { formatDuration, plural } from "./format";
 import type { AgentTask } from "./tasks";
 
 /** What the progress line reports on, read fresh on every refresh. */
@@ -176,7 +177,7 @@ export class ProgressLine {
 			const quiet = now - t.lastEvent >= AGENT_QUIET_AFTER;
 			const meta = quiet
 				? `No activity for ${formatDuration(now - t.lastEvent)}`
-				: [t.toolUses ? `${t.toolUses} ${t.toolUses === 1 ? "tool" : "tools"}` : "", formatDuration(now - t.started)].filter(Boolean).join(" · ");
+				: [t.toolUses ? plural(t.toolUses, "tool") : "", formatDuration(now - t.started)].filter(Boolean).join(" · ");
 			return { name: t.description || "Agent", activity: t.activity, meta, quiet };
 		});
 		const more = tasks.length - rows.length;
@@ -192,7 +193,7 @@ export class ProgressLine {
 			el.createSpan({ cls: "apollo-working-agent-activity", text: row.activity });
 			el.createSpan({ cls: "apollo-working-agent-meta", text: row.meta });
 		}
-		if (more > 0) this.agentsEl.createDiv({ cls: "apollo-working-agent is-more", text: `and ${more} more ${more === 1 ? "agent" : "agents"}` });
+		if (more > 0) this.agentsEl.createDiv({ cls: "apollo-working-agent is-more", text: `and ${plural(more, "more agent")}` });
 	}
 }
 

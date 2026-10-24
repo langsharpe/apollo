@@ -1,9 +1,10 @@
 import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type EventRef, type TAbstractFile, type Vault, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import { agentTotals, filePath, formatDuration, toolKind, type ActivityGroup, type Step } from "./activity";
+import { filePath, toolKind, type ActivityGroup, type Step } from "./activity";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatSession } from "./chat-session";
+import { agentTotals, errorMessage, formatDuration, truncate } from "./format";
 import type ApolloPlugin from "./main";
 import { pickOne } from "./modals";
 import { showPermissionCard } from "./permission-card";
@@ -425,7 +426,7 @@ export class ChatView extends ItemView {
 		} catch (err) {
 			if (session !== this.session) return;
 			loading.remove();
-			this.note(`Couldn't load this chat: ${err instanceof Error ? err.message : String(err)}`, "apollo-error");
+			this.note(`Couldn't load this chat: ${errorMessage(err)}`, "apollo-error");
 			return;
 		}
 		if (session !== this.session) return;
@@ -582,7 +583,7 @@ export class ChatView extends ItemView {
 			await this.session.setPermissionMode(mode);
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
-			new Notice(`Couldn't switch permission mode: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't switch permission mode: ${errorMessage(err)}`);
 			this.mode = previous;
 			this.renderModeOptions();
 		}
@@ -632,7 +633,7 @@ export class ChatView extends ItemView {
 		// Background agents went with the process.
 		this.settleActivities(true);
 		console.error("Apollo: Claude Code ended", err);
-		this.note(`Error: ${err instanceof Error ? err.message : String(err)}`, "apollo-error");
+		this.note(`Error: ${errorMessage(err)}`, "apollo-error");
 		this.returnQueuedToInput();
 		this.stopping = false;
 		this.progress.idle();
@@ -1079,7 +1080,7 @@ export class ChatView extends ItemView {
 			this.updateInfo();
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
-			new Notice(`Couldn't switch model: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't switch model: ${errorMessage(err)}`);
 		}
 		this.renderModelOptions();
 		// The new model may offer different levels, or none.
@@ -1091,7 +1092,7 @@ export class ChatView extends ItemView {
 			await this.session.setEffort(effort);
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
-			new Notice(`Couldn't switch effort: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't switch effort: ${errorMessage(err)}`);
 		}
 		this.renderEffortOptions();
 	}
@@ -1359,7 +1360,7 @@ export function userPrompt(message: unknown): string {
 /** First line of a prompt, short enough for a tab title. */
 function summarise(text: string): string {
 	const line = text.split("\n").find((l) => l.trim())?.trim() ?? text;
-	return line.length > TITLE_LENGTH ? `${line.slice(0, TITLE_LENGTH - 1)}…` : line;
+	return truncate(line, TITLE_LENGTH);
 }
 
 /** A permission mode from a /mode argument: ask, accept-edits, plan or auto. */

@@ -1,4 +1,5 @@
 import { TFile, WorkspaceTabs, resolveSubpath, type WorkspaceSplit, setIcon, setTooltip, type App, type EventRef, type WorkspaceLeaf } from "obsidian";
+import { plural } from "./format";
 import type { ApolloSettings } from "./settings";
 import type { PresentRequest } from "./vault-tools";
 
@@ -53,7 +54,7 @@ export class Presenter {
 		this.seq++;
 		const max = this.settings().presentMaxPerTurn;
 		if (this.count >= max) {
-			return `Not opened: already showed ${max} ${max === 1 ? "note" : "notes"} this turn, the limit set in Apollo. List ${file.path} and any other notes as links in your reply instead.`;
+			return `Not opened: already showed ${plural(max, "note")} this turn, the limit set in Apollo. List ${file.path} and any other notes as links in your reply instead.`;
 		}
 		this.count++;
 

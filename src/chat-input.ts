@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { Menu, TFile, TFolder, prepareFuzzySearch, renderResults, setIcon, type App, type Component, type SearchResult, type TAbstractFile } from "obsidian";
 import { sourceLabel, type CatalogueEntry } from "./catalogue";
+import { truncate } from "./format";
 import { InputMenu, type ChooseHow, type MenuRow } from "./input-menu";
 import type ApolloPlugin from "./main";
 import { findReferences, formatReference, isAbsolutePath, vaultRelative } from "./references";
@@ -283,7 +284,7 @@ export class ChatInput {
 				if (e.argumentHint) title.createSpan({ cls: "apollo-menu-hint", text: ` ${e.argumentHint}` });
 				const note = e.unavailable ? `${e.unavailable}. ${e.description}` : e.description;
 				// Only one line shows, but laying out a 1,000-character description costs as much as showing it.
-				if (note) content.createDiv({ cls: "suggestion-note", text: note.length > NOTE_LENGTH ? `${note.slice(0, NOTE_LENGTH - 1)}…` : note });
+				if (note) content.createDiv({ cls: "suggestion-note", text: truncate(note, NOTE_LENGTH) });
 				el.createDiv({ cls: "suggestion-aux" }).createSpan({ cls: `apollo-badge is-${e.source}`, text: sourceLabel(e) });
 			},
 		};

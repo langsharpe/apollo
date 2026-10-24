@@ -13,6 +13,7 @@ import {
 	type TAbstractFile,
 } from "obsidian";
 import { z } from "zod";
+import { errorMessage, plural } from "./format";
 import { vaultRelative } from "./references";
 
 /** The MCP server's name. Its tools reach Claude Code as `mcp__apollo__<tool>`. */
@@ -138,7 +139,7 @@ function handle<A>(fn: (args: A) => Promise<Result>): (args: A) => Promise<Resul
 		try {
 			return await fn(args);
 		} catch (err) {
-			return { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true };
+			return { content: [{ type: "text", text: errorMessage(err) }], isError: true };
 		}
 	};
 }
@@ -531,7 +532,7 @@ function toolDefinitions(host: ToolHost) {
 					return text(clip(String(await run({ path: file.path, ...(view ? { view } : {}), format: "json" }))));
 				} catch (err) {
 					// Obsidian's handler throws plain strings.
-					throw new ToolError(err instanceof Error ? err.message : String(err));
+					throw new ToolError(errorMessage(err));
 				}
 			}),
 			ro("Bases query"),
@@ -671,10 +672,6 @@ function show(value: unknown): string {
 /** A path as Apollo writes references: quoted if it has spaces, so the chat can make it a link. */
 function q(path: string): string {
 	return /\s/.test(path) ? `"${path}"` : path;
-}
-
-function plural(n: number, word: string): string {
-	return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 function parentOf(path: string): string {
