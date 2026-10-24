@@ -67,6 +67,25 @@ export default class ApolloPlugin extends Plugin {
 		this.registerView(SESSION_LIST_VIEW_TYPE, (leaf) => new SessionListView(leaf, this));
 		this.app.workspace.onLayoutReady(() => this.repairGhostTabs());
 
+		this.registerCommands();
+		this.registerMenus();
+		this.registerEmptyTabActions();
+
+		this.ribbonEl = this.addRibbonIcon(this.settings.icon, "New Apollo chat", () => void this.openChat());
+		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
+
+		this.registerEvent(this.app.workspace.on("quit", () => this.closeAll()));
+		// The chat that last had focus is where "Add to chat" goes.
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
+				// Hotkeys can change while a tab is open; refresh the shown one when an empty tab gets focus.
+				if (leaf?.view.getViewType() === "empty") this.addEmptyTabActions();
+			}),
+		);
+	}
+
+	private registerCommands(): void {
 		// TAB-3.
 		this.addCommand({
 			id: "new-chat",
@@ -88,22 +107,12 @@ export default class ApolloPlugin extends Plugin {
 		this.addCommand({
 			id: "close-chat",
 			name: "Close chat",
-			checkCallback: (checking) => {
-				const view = this.app.workspace.getActiveViewOfType(ChatView);
-				if (!view) return false;
-				if (!checking) view.leaf.detach();
-				return true;
-			},
+			checkCallback: (checking) => this.withActiveChat(checking, (view) => view.leaf.detach()),
 		});
 		this.addCommand({
 			id: "toggle-work",
 			name: "Show or hide thinking and tool calls",
-			checkCallback: (checking) => {
-				const view = this.app.workspace.getActiveViewOfType(ChatView);
-				if (!view) return false;
-				if (!checking) view.toggleWork();
-				return true;
-			},
+			checkCallback: (checking) => this.withActiveChat(checking, (view) => view.toggleWork()),
 		});
 		this.addCommand({
 			id: "focus-next-chat",
@@ -142,6 +151,17 @@ export default class ApolloPlugin extends Plugin {
 				return true;
 			},
 		});
+	}
+
+	/** A command that runs on the active chat and is unavailable without one. */
+	private withActiveChat(checking: boolean, run: (view: ChatView) => void): boolean {
+		const view = this.app.workspace.getActiveViewOfType(ChatView);
+		if (!view) return false;
+		if (!checking) run(view);
+		return true;
+	}
+
+	private registerMenus(): void {
 		// CTX-3.
 		this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => this.addChatMenuItems(menu, [file])));
 		this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => this.addChatMenuItems(menu, files)));
@@ -158,29 +178,15 @@ export default class ApolloPlugin extends Plugin {
 				);
 			}),
 		);
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", (leaf) => {
-				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
-			}),
-		);
+	}
 
+	private registerEmptyTabActions(): void {
 		// Empty tabs get a "New chat" button next to core's "New note" and "Go to file".
 		this.app.workspace.onLayoutReady(() => this.addEmptyTabActions());
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.addEmptyTabActions()));
-		// Hotkeys can change while a tab is open; refresh the shown one when an empty tab gets focus.
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", (leaf) => {
-				if (leaf?.view.getViewType() === "empty") this.addEmptyTabActions();
-			}),
-		);
 		this.register(() => {
 			for (const leaf of this.app.workspace.getLeavesOfType("empty")) leaf.view.containerEl.querySelector(".apollo-new-chat-action")?.remove();
 		});
-
-		this.ribbonEl = this.addRibbonIcon(this.settings.icon, "New Apollo chat", () => void this.openChat());
-		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
-
-		this.registerEvent(this.app.workspace.on("quit", () => this.closeAll()));
 	}
 
 	override onunload(): void {
