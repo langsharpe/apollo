@@ -1,6 +1,6 @@
 import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type App, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
-import { CHAT_VIEW_TYPE, ChatView, userPrompt, type ChatViewState } from "./chat-view";
+import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, userPrompt, type ChatViewState } from "./chat-view";
 import type { ChatSession } from "./chat-session";
 import { confirmAction, promptText } from "./modals";
 import { formatSelection } from "./references";
@@ -56,6 +56,7 @@ export default class ApolloPlugin extends Plugin {
 
 		this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
 		this.registerView(SESSION_LIST_VIEW_TYPE, (leaf) => new SessionListView(leaf, this));
+		this.app.workspace.onLayoutReady(() => this.repairGhostTabs());
 
 		// TAB-3.
 		this.addCommand({
@@ -402,6 +403,31 @@ export default class ApolloPlugin extends Plugin {
 		return this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
 	}
 
+	/**
+	 * While Apollo's view is unregistered (a plugin reload, or Apollo disabled),
+	 * Obsidian shows chat tabs as its unknown pane, with a ghost icon and
+	 * "apollo-chat" as the title, and a layout saved then keeps both. A tab
+	 * restored in the background is deferred and shows the saved icon and
+	 * title until it's opened, and registering the view again only rebuilds
+	 * loaded tabs. So put the right header on deferred chats, without loading
+	 * them (TAB-4).
+	 */
+	private repairGhostTabs(): void {
+		let repaired = false;
+		for (const leaf of this.chatLeaves()) {
+			if (!leaf.isDeferred) continue;
+			const view = leaf.view as View & DeferredViewInternals;
+			const saved = leaf.getViewState().state?.title;
+			const title = typeof saved === "string" && saved ? saved : NEW_CHAT_TITLE;
+			if (view.icon === undefined || (view.icon === "bot" && view.title === title)) continue;
+			view.icon = "bot";
+			view.title = title;
+			(leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
+			repaired = true;
+		}
+		if (repaired) this.app.workspace.requestSaveLayout();
+	}
+
 	/** Cycles focus through open chats. From outside a chat, starts at the first or last. */
 	private async focusChat(step: 1 | -1): Promise<void> {
 		const leaves = this.chatLeaves();
@@ -437,6 +463,18 @@ interface MenuInternals {
 /** Obsidian internals the public API doesn't expose. May be missing. */
 interface AppInternals {
 	hotkeyManager?: { printHotkeyForCommand?(id: string): string };
+}
+
+/** Obsidian internals the public API doesn't expose. May be missing. */
+interface LeafInternals {
+	/** Refreshes the tab's icon and title from the view. */
+	updateHeader?(): void;
+}
+
+/** A deferred tab's stand-in view, which shows the icon and title saved with the layout. */
+interface DeferredViewInternals {
+	icon?: string;
+	title?: string;
 }
 
 /** The session a chat leaf shows. Works for deferred tabs, whose saved state stands in for the view. */

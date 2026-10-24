@@ -60,7 +60,7 @@ interface VaultInternals {
 /** What an Agent call returns when the agent goes to the background. */
 const BACKGROUND_AGENT = "Async agent launched";
 
-const NEW_CHAT_TITLE = "New chat";
+export const NEW_CHAT_TITLE = "New chat";
 const TITLE_LENGTH = 50;
 
 /** Pixels from the bottom that still count as being at the end. */
