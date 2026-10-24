@@ -15,7 +15,8 @@ export interface ChatInputHandlers {
 	changed(): void;
 }
 
-type Token = { kind: "slash" | "file"; from: number; query: string };
+/** A `/command` or `@file` being typed: `from` is its trigger character, `to` the end of its query. */
+type Token = { kind: "slash" | "file"; from: number; to: number; query: string };
 
 const FILE_RESULTS = 50;
 const RECENT_FILES = 10;
@@ -38,6 +39,8 @@ const SLASH_GROUPS: [CatalogueEntry["kind"], string][] = [
 export class ChatInput {
 	readonly el: HTMLTextAreaElement;
 	private readonly app: App;
+	/** Holds the textarea, its backdrop and the menus; the drop target. */
+	private readonly boxEl: HTMLElement;
 	private readonly backdropEl: HTMLElement;
 	private readonly warningEl: HTMLElement;
 	private readonly slashMenu: InputMenu<CatalogueEntry>;
@@ -57,7 +60,7 @@ export class ChatInput {
 		this.app = plugin.app;
 		this.warningEl = parent.createDiv({ cls: "apollo-input-warning" });
 		this.warningEl.hide();
-		const box = parent.createDiv({ cls: "apollo-input-box" });
+		const box = (this.boxEl = parent.createDiv({ cls: "apollo-input-box" }));
 		this.backdropEl = box.createDiv({ cls: "apollo-input-backdrop", attr: { "aria-hidden": "true" } });
 		this.el = box.createEl("textarea", { attr: { placeholder: "Ask Claude…  (@ for files, / for commands, Enter to send)", rows: "1" } });
 		this.slashMenu = new InputMenu(box, (entry, how) => this.chooseCommand(entry, how), "apollo-slash-menu");
@@ -202,9 +205,9 @@ export class ChatInput {
 		const before = value.slice(0, start);
 		// SLS-1: "/" at the start or after whitespace. CTX-1: "@" likewise, or after a bracket.
 		const slash = /(?:^|\s)\/(\S*)$/.exec(before);
-		if (slash) return { kind: "slash", from: start - slash[1]!.length - 1, query: slash[1]! };
+		if (slash) return { kind: "slash", from: start - slash[1]!.length - 1, to: start, query: slash[1]! };
 		const at = /(?:^|[\s([])@([^\s"]*)$/.exec(before);
-		if (at) return { kind: "file", from: start - at[1]!.length - 1, query: at[1]! };
+		if (at) return { kind: "file", from: start - at[1]!.length - 1, to: start, query: at[1]! };
 		return null;
 	}
 
@@ -280,12 +283,11 @@ export class ChatInput {
 	private chooseCommand(entry: CatalogueEntry, how: ChooseHow): void {
 		const token = this.token;
 		if (token?.kind !== "slash") return;
-		const end = token.from + 1 + token.query.length;
 		if (how === "tab" && token.query !== entry.name) {
-			this.replaceRange(token.from, end, `/${entry.name}`);
+			this.replaceRange(token.from, token.to, `/${entry.name}`);
 			return;
 		}
-		this.replaceRange(token.from, end, `/${entry.name} `);
+		this.replaceRange(token.from, token.to, `/${entry.name} `);
 		this.closeMenus();
 	}
 
@@ -331,14 +333,13 @@ export class ChatInput {
 	private chooseFile(file: TAbstractFile, how: ChooseHow): void {
 		const token = this.token;
 		if (token?.kind !== "file") return;
-		const end = token.from + 1 + token.query.length;
 		if (how === "tab" && file instanceof TFolder) {
-			this.replaceRange(token.from, end, `@${file.path}/`);
+			this.replaceRange(token.from, token.to, `@${file.path}/`);
 			return;
 		}
 		const ref = formatReference(file, this.plugin.settings.referenceFormat);
-		const after = this.el.value.slice(end);
-		this.replaceRange(token.from, end, /^\s/.test(after) ? ref : `${ref} `);
+		const after = this.el.value.slice(token.to);
+		this.replaceRange(token.from, token.to, /^\s/.test(after) ? ref : `${ref} `);
 		this.closeMenus();
 	}
 
@@ -353,11 +354,16 @@ export class ChatInput {
 		this.insertPaths(lines);
 	}
 
+	/** The vault file or folder at an absolute path (or one starting with ~/), or null if it's outside the vault. */
+	private vaultFileAt(absPath: string): TAbstractFile | null {
+		const rel = vaultRelative(absPath.replace(/^~(?=\/)/, homedir()), this.plugin.vaultPath());
+		return rel ? this.app.vault.getAbstractFileByPath(rel) : null;
+	}
+
 	private insertPaths(paths: string[]): void {
 		const format = this.plugin.settings.referenceFormat;
 		const parts = paths.map((p) => {
-			const rel = vaultRelative(p.replace(/^~(?=\/)/, homedir()), this.plugin.vaultPath());
-			const file = rel ? this.app.vault.getAbstractFileByPath(rel) : null;
+			const file = this.vaultFileAt(p);
 			if (file) return formatReference(file, format);
 			this.outside.add(p);
 			return p;
@@ -373,12 +379,12 @@ export class ChatInput {
 		evt.preventDefault();
 		evt.stopPropagation();
 		dt.dropEffect = "copy";
-		this.el.parentElement?.addClass("is-drag-over");
+		this.boxEl.addClass("is-drag-over");
 	}
 
 	/** CTX-2: files and folders from the explorer, tab headers, search, links, or the OS. */
 	private onDrop(evt: DragEvent): void {
-		this.el.parentElement?.removeClass("is-drag-over");
+		this.boxEl.removeClass("is-drag-over");
 		const files = this.droppedFiles(evt);
 		if (files.vault.length || files.outside.length) {
 			evt.preventDefault();
@@ -390,7 +396,7 @@ export class ChatInput {
 	}
 
 	private droppedFiles(evt: DragEvent): { vault: TAbstractFile[]; outside: string[] } {
-		const { vault, metadataCache } = this.app;
+		const { metadataCache } = this.app;
 		const drag = draggedItem(this.app);
 		if (drag) {
 			if ((drag.type === "file" || drag.type === "folder") && drag.file) return { vault: [drag.file], outside: [] };
@@ -407,8 +413,7 @@ export class ChatInput {
 			const inVault: TAbstractFile[] = [];
 			const outside: string[] = [];
 			for (const p of paths) {
-				const rel = vaultRelative(p, this.plugin.vaultPath());
-				const file = rel ? vault.getAbstractFileByPath(rel) : null;
+				const file = this.vaultFileAt(p);
 				if (file) inVault.push(file);
 				else outside.push(p);
 			}
