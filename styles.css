@@ -149,156 +149,6 @@
 	transform: rotate(90deg);
 }
 
-/*
- * The status row at the end of the transcript (RND-8): the current step, a
- * warning when Claude goes quiet, the turn's elapsed time, and a row per
- * running agent (RND-9). It fades in after a second, so quick turns don't
- * flash it. Stalls change the colour and stop the spinner rather than adding
- * motion.
- */
-.apollo-working {
-	display: none;
-	flex-direction: column;
-	gap: var(--size-2-1);
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	animation: apollo-appear 150ms ease-out 1s backwards;
-	/* Double-click toggles thinking and tool calls, so it shouldn't select a word. */
-	user-select: none;
-}
-
-.apollo-chat[data-status="running"] .apollo-working,
-.apollo-chat[data-status="awaiting"] .apollo-working {
-	display: flex;
-}
-
-@keyframes apollo-appear {
-	from {
-		opacity: 0;
-	}
-}
-
-.apollo-working-main {
-	display: flex;
-	align-items: center;
-	gap: var(--size-4-2);
-	min-width: 0;
-}
-
-.apollo-working-spinner {
-	flex-shrink: 0;
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	border: 1.5px solid var(--background-modifier-border);
-	border-top-color: var(--text-accent);
-	animation: apollo-spin 0.8s linear infinite;
-}
-
-.apollo-working:not([data-state="ok"]) .apollo-working-spinner {
-	animation: none;
-	border-color: currentColor;
-}
-
-.apollo-working[data-state="awaiting"] .apollo-working-main {
-	color: var(--color-orange);
-}
-
-.apollo-working[data-state="warning"] .apollo-working-main {
-	color: var(--color-yellow);
-}
-
-.apollo-working-label {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.apollo-working-warning:not(:empty)::before {
-	content: "· ";
-}
-
-.apollo-working-warning {
-	flex-shrink: 0;
-}
-
-.apollo-working-elapsed {
-	flex-shrink: 0;
-	margin-left: auto;
-	color: var(--text-faint);
-	font-variant-numeric: tabular-nums;
-}
-
-.apollo-working-agents {
-	display: flex;
-	flex-direction: column;
-	gap: var(--size-2-1);
-}
-
-.apollo-working-agents:empty {
-	display: none;
-}
-
-.apollo-working-agent {
-	display: flex;
-	align-items: center;
-	gap: var(--size-4-2);
-	min-width: 0;
-	padding-left: calc(10px + var(--size-4-2));
-}
-
-.apollo-working-agent-icon {
-	display: flex;
-	flex-shrink: 0;
-	color: var(--text-faint);
-	--icon-size: var(--icon-xs);
-}
-
-.apollo-working-agent-name {
-	flex-shrink: 0;
-	max-width: 50%;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	color: var(--text-normal);
-}
-
-.apollo-working-agent-activity {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.apollo-working-agent-meta {
-	flex-shrink: 0;
-	margin-left: auto;
-	color: var(--text-faint);
-	font-variant-numeric: tabular-nums;
-}
-
-.apollo-working-agent.is-quiet .apollo-working-agent-meta {
-	color: var(--color-yellow);
-}
-
-.apollo-working-agent.is-more {
-	color: var(--text-faint);
-}
-
-@keyframes apollo-spin {
-	to {
-		transform: rotate(360deg);
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.apollo-working,
-	.apollo-working-spinner {
-		animation: none;
-	}
-}
-
 .apollo-activity-label {
 	flex: 1;
 	min-width: 0;
@@ -476,6 +326,156 @@
 .apollo-activity-change {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+}
+
+/*
+ * The status row at the end of the transcript (RND-8): the current step, a
+ * warning when Claude goes quiet, the turn's elapsed time, and a row per
+ * running agent (RND-9). It fades in after a second, so quick turns don't
+ * flash it. Stalls change the colour and stop the spinner rather than adding
+ * motion.
+ */
+.apollo-working {
+	display: none;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	animation: apollo-appear 150ms ease-out 1s backwards;
+	/* Double-click toggles thinking and tool calls, so it shouldn't select a word. */
+	user-select: none;
+}
+
+.apollo-chat[data-status="running"] .apollo-working,
+.apollo-chat[data-status="awaiting"] .apollo-working {
+	display: flex;
+}
+
+@keyframes apollo-appear {
+	from {
+		opacity: 0;
+	}
+}
+
+.apollo-working-main {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.apollo-working-spinner {
+	flex-shrink: 0;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	border: 1.5px solid var(--background-modifier-border);
+	border-top-color: var(--text-accent);
+	animation: apollo-spin 0.8s linear infinite;
+}
+
+.apollo-working:not([data-state="ok"]) .apollo-working-spinner {
+	animation: none;
+	border-color: currentColor;
+}
+
+.apollo-working[data-state="awaiting"] .apollo-working-main {
+	color: var(--color-orange);
+}
+
+.apollo-working[data-state="warning"] .apollo-working-main {
+	color: var(--color-yellow);
+}
+
+.apollo-working-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-working-warning:not(:empty)::before {
+	content: "· ";
+}
+
+.apollo-working-warning {
+	flex-shrink: 0;
+}
+
+.apollo-working-elapsed {
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.apollo-working-agents {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+}
+
+.apollo-working-agents:empty {
+	display: none;
+}
+
+.apollo-working-agent {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+	padding-left: calc(10px + var(--size-4-2));
+}
+
+.apollo-working-agent-icon {
+	display: flex;
+	flex-shrink: 0;
+	color: var(--text-faint);
+	--icon-size: var(--icon-xs);
+}
+
+.apollo-working-agent-name {
+	flex-shrink: 0;
+	max-width: 50%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-normal);
+}
+
+.apollo-working-agent-activity {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.apollo-working-agent-meta {
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
+}
+
+.apollo-working-agent.is-quiet .apollo-working-agent-meta {
+	color: var(--color-yellow);
+}
+
+.apollo-working-agent.is-more {
+	color: var(--text-faint);
+}
+
+@keyframes apollo-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.apollo-working,
+	.apollo-working-spinner {
+		animation: none;
+	}
 }
 
 /* Permission cards. */
