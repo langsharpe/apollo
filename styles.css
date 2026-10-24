@@ -142,11 +142,7 @@
 	display: flex;
 	color: var(--text-faint);
 	transition: transform 100ms ease-in-out;
-}
-
-.apollo-activity-chevron svg {
-	width: var(--icon-xs);
-	height: var(--icon-xs);
+	--icon-size: var(--icon-xs);
 }
 
 .is-open > .apollo-activity-header .apollo-activity-chevron {
@@ -768,11 +764,7 @@
 .apollo-input-warning-icon {
 	display: flex;
 	flex-shrink: 0;
-}
-
-.apollo-input-warning-icon svg {
-	width: var(--icon-xs);
-	height: var(--icon-xs);
+	--icon-size: var(--icon-xs);
 }
 
 /* @ picker and slash menu, above the input. */
@@ -874,11 +866,7 @@
 .apollo-ref-icon {
 	align-self: center;
 	display: flex;
-}
-
-.apollo-ref-icon svg {
-	width: var(--icon-xs);
-	height: var(--icon-xs);
+	--icon-size: var(--icon-xs);
 }
 
 code.apollo-ref {
@@ -890,6 +878,27 @@ code.apollo-ref {
 	align-items: center;
 	gap: var(--size-4-2);
 	margin-top: var(--size-4-2);
+}
+
+/* One colour per status, for the info icon's dot and the tab's. */
+.apollo-chat[data-status="running"],
+.workspace-tab-header[data-apollo-status="running"] {
+	--apollo-status-color: var(--color-green);
+}
+
+.apollo-chat[data-status="awaiting"],
+.workspace-tab-header[data-apollo-status="awaiting"] {
+	--apollo-status-color: var(--color-orange);
+}
+
+.apollo-chat[data-status="error"],
+.workspace-tab-header[data-apollo-status="error"] {
+	--apollo-status-color: var(--color-red);
+}
+
+/* Finished while you were looking elsewhere; cleared when you look (RND-8). */
+.workspace-tab-header[data-apollo-status="idle"][data-apollo-unseen] {
+	--apollo-status-color: var(--interactive-accent);
 }
 
 /* Info icon with a status dot in its corner. */
@@ -906,19 +915,7 @@ code.apollo-ref {
 	width: 7px;
 	height: 7px;
 	border-radius: 50%;
-	background: var(--text-faint);
-}
-
-.apollo-chat[data-status="running"] .apollo-info::after {
-	background: var(--color-green);
-}
-
-.apollo-chat[data-status="awaiting"] .apollo-info::after {
-	background: var(--color-orange);
-}
-
-.apollo-chat[data-status="error"] .apollo-info::after {
-	background: var(--color-red);
+	background: var(--apollo-status-color, var(--text-faint));
 }
 
 .apollo-open-notes {
@@ -944,23 +941,7 @@ code.apollo-ref {
 	width: 6px;
 	height: 6px;
 	border-radius: 50%;
-}
-
-/* Finished while you were looking elsewhere; cleared when you look (RND-8). */
-.workspace-tab-header[data-apollo-status="idle"][data-apollo-unseen] .workspace-tab-header-inner-icon::after {
-	background: var(--interactive-accent);
-}
-
-.workspace-tab-header[data-apollo-status="running"] .workspace-tab-header-inner-icon::after {
-	background: var(--color-green);
-}
-
-.workspace-tab-header[data-apollo-status="awaiting"] .workspace-tab-header-inner-icon::after {
-	background: var(--color-orange);
-}
-
-.workspace-tab-header[data-apollo-status="error"] .workspace-tab-header-inner-icon::after {
-	background: var(--color-red);
+	background: var(--apollo-status-color);
 }
 
 /* Marks the tab where a chat shows notes (OBS-17). */
@@ -1058,11 +1039,7 @@ code.apollo-ref {
 	display: flex;
 	flex-shrink: 0;
 	color: var(--text-faint);
-}
-
-.apollo-session-icon svg {
-	width: var(--icon-xs);
-	height: var(--icon-xs);
+	--icon-size: var(--icon-xs);
 }
 
 /* No vertical padding, so it never makes the row taller than a file row. */
