@@ -152,7 +152,7 @@ export class ChatView extends ItemView {
 			changed: () => this.app.workspace.requestSaveLayout(),
 		});
 		this.toolbar = new ChatToolbar(form, this, {
-			copySessionId: () => this.copySessionId(),
+			copySessionId: () => this.sessionId && this.plugin.copySessionId(this.sessionId),
 			changeModel: (model) => void this.changeModel(model),
 			changeEffort: (effort) => void this.changeEffort(effort),
 			changeMode: (mode) => void this.changeMode(mode),
@@ -167,7 +167,6 @@ export class ChatView extends ItemView {
 				this.renderEffortOptions();
 			}),
 		);
-		this.renderModeOptions();
 		// Double-click the view header's title to rename the chat in place.
 		const titleEl = viewTitleEl(this);
 		if (titleEl) this.registerDomEvent(titleEl, "dblclick", () => this.editTitle(titleEl));
@@ -245,7 +244,7 @@ export class ChatView extends ItemView {
 		if (!id) return;
 		menu.addItem((item) => item.setSection("action").setTitle("Rename chat").setIcon("pencil").onClick(() => void this.plugin.renameChat(id, this.title)));
 		menu.addItem((item) => item.setSection("action").setTitle("Fork chat").setIcon("git-branch").onClick(() => void this.plugin.forkChat(id)));
-		menu.addItem((item) => item.setSection("action").setTitle("Copy session ID").setIcon("copy").onClick(() => this.copySessionId()));
+		menu.addItem((item) => item.setSection("action").setTitle("Copy session ID").setIcon("copy").onClick(() => this.sessionId && this.plugin.copySessionId(this.sessionId)));
 	}
 
 	/** Focus is in this chat, or nowhere in particular. */
@@ -816,12 +815,6 @@ export class ChatView extends ItemView {
 		lines.push(`Output style: ${style && style !== "default" ? style : "none"}`);
 		if (id) lines.push(`Session: ${id.slice(0, 8)}`, this.session.running ? "Claude Code is running." : "Claude Code starts on your next message.", "Click to copy the full session ID.");
 		this.toolbar.setInfo(lines);
-	}
-
-	private copySessionId(): void {
-		const id = this.sessionId;
-		if (!id) return;
-		void navigator.clipboard.writeText(id).then(() => new Notice("Session ID copied."));
 	}
 
 	/**
