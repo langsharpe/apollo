@@ -1,7 +1,5 @@
-import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKAssistantMessage, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Component, ItemView, Keymap, MarkdownRenderer, Menu, Notice, setIcon, setTooltip, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
-import type { ActivityGroup } from "./activity";
-import { filePath, toolKind, type Step } from "./tool-calls";
+import type { CanUseTool, EffortLevel, PermissionMode, PermissionResult, SDKMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ItemView, Menu, Notice, type TAbstractFile, type ViewStateResult, type WorkspaceLeaf } from "obsidian";
 import { resolveShellEnv } from "./cli";
 import { ChatInput } from "./chat-input";
 import { ChatToolbar } from "./chat-toolbar";
@@ -13,15 +11,11 @@ import { onVaultConfigChanged, refreshTabHeader, tabHeaderEl, vaultConfig, viewT
 import { showPermissionCard } from "./permission-card";
 import { Presenter } from "./presenter";
 import { ProgressLine } from "./progress";
-import { MarkdownStream } from "./markdown-stream";
-import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { parseApolloCommand } from "./apollo-commands";
 import { newChatConfig, type ChatConfig, effortOptions, nullIfDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
-import { contentBlocks, displayPrompt, INTERRUPTED, resultText, taskNotification } from "./transcript-history";
-import type { ThinkingBlock } from "./thinking";
+import { Transcript } from "./transcript";
 import { TranscriptScroller } from "./transcript-scroll";
-import { WorkSection } from "./work";
 
 export const CHAT_VIEW_TYPE = "apollo-chat";
 
@@ -42,9 +36,6 @@ export interface ChatViewState extends Omit<ChatConfig, "permissionMode"> {
 	/** Thinking and tool calls show in the transcript, or null to follow the setting. */
 	showWork: boolean | null;
 }
-
-/** What an Agent call returns when the agent goes to the background. */
-const BACKGROUND_AGENT = "Async agent launched";
 
 export const NEW_CHAT_TITLE = "New chat";
 const TITLE_LENGTH = 50;
@@ -69,32 +60,14 @@ export class ChatView extends ItemView {
 	private unseen = false;
 	/** This chat shows or hides thinking and tool calls regardless of the setting, or null to follow it. */
 	private workOverride: boolean | null = null;
-	/** Work sections open as they're added, after the brain icon or the status row showed them, until they're hidden again. */
-	private expandWork = false;
 
 	private toolbar!: ChatToolbar;
 	/** Scrolls the transcript and the status row after it. */
 	private scrollEl!: HTMLElement;
 	private scroller!: TranscriptScroller;
-	private transcriptEl!: HTMLElement;
+	private transcript!: Transcript;
 	private progress!: ProgressLine;
 	private input!: ChatInput;
-
-	// Streaming state for the current text block.
-	private textStream: MarkdownStream | null = null;
-	private textStarted = 0;
-	/** The thinking block streaming now, if any. */
-	private thinking: ThinkingBlock | null = null;
-	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
-	private textAwaitingUuid: HTMLElement[] = [];
-	/** Marks a tool call done or failed, by tool_use id, with the result's text. */
-	private toolResults = new Map<string, (isError: boolean, output: string) => void>();
-	/** Write calls that will create a note, by tool_use id, for auto-present (OBS-19). */
-	private newNotes = new Map<string, string>();
-	/** Runs of thinking and tool calls in the transcript; the last one takes more while nothing follows it. */
-	private sections: WorkSection[] = [];
-	/** The group holding each Agent call, by tool_use id, for the agent's progress and edits (RND-9). */
-	private agentCalls = new Map<string, ActivityGroup>();
 
 	/** Opens notes for this chat: workspace_present and auto-present (OBS-14 to OBS-19). */
 	private readonly presenter: Presenter;
@@ -145,10 +118,20 @@ export class ChatView extends ItemView {
 		);
 
 		this.scrollEl = root.createDiv({ cls: "apollo-scroll" });
-		this.transcriptEl = this.scrollEl.createDiv({ cls: "apollo-transcript" });
+		this.transcript = new Transcript(this.scrollEl.createDiv({ cls: "apollo-transcript" }), {
+			app: this.app,
+			plugin: this.plugin,
+			component: this,
+			leaf: this.leaf,
+			presenter: this.presenter,
+			tasks: () => this.session.tasks,
+			showWork: () => this.showWork,
+			toggleWork: (anchor) => this.setShowWork(!this.showWork, anchor, true),
+			fork: (uuid, role) => this.forkFrom(uuid, role),
+		});
 		// Shown at the end of the transcript from send until the turn and its agents end, including while a process starts (RND-8).
 		this.progress = new ProgressLine(this.scrollEl, this, {
-			step: () => this.currentStep(),
+			step: () => this.transcript.currentStep(),
 			tasks: () => this.session.tasks.list,
 			awaiting: () => this.pendingCards > 0,
 		});
@@ -157,9 +140,6 @@ export class ChatView extends ItemView {
 		this.scroller = new TranscriptScroller(this.scrollEl, () => this.app.workspace.requestSaveLayout());
 		this.registerDomEvent(this.scrollEl, "scroll", () => this.scroller.onScroll());
 		this.register(() => this.scroller.dispose());
-
-		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
-		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
 
 		const form = root.createDiv({ cls: "apollo-input" });
 		this.input = new ChatInput(form, this.plugin, this, {
@@ -199,7 +179,7 @@ export class ChatView extends ItemView {
 
 		this.reset(null);
 		const { claudePath } = await resolveShellEnv();
-		if (!this.plugin.settings.cliPath && !claudePath) this.note("Claude CLI not found. Set its path in settings.", "apollo-error");
+		if (!this.plugin.settings.cliPath && !claudePath) this.transcript.note("Claude CLI not found. Set its path in settings.", "apollo-error");
 	}
 
 	override async onClose(): Promise<void> {
@@ -289,8 +269,7 @@ export class ChatView extends ItemView {
 	 */
 	setShowWork(show: boolean, anchor?: HTMLElement, expand = false): void {
 		this.workOverride = show === this.plugin.settings.showWork ? null : show;
-		this.expandWork = show && expand;
-		if (this.expandWork || !show) for (const section of this.sections) section.setOpen(show);
+		this.transcript.setWorkOpen(show, expand);
 		this.applyShowWork(anchor);
 		this.app.workspace.requestSaveLayout();
 	}
@@ -313,7 +292,7 @@ export class ChatView extends ItemView {
 	applyShowWork(anchor?: HTMLElement): void {
 		const change = () => {
 			this.contentEl.toggleClass("apollo-hide-work", !this.showWork);
-			for (const el of Array.from(this.contentEl.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
+			this.transcript.renderWorkToggles();
 		};
 		if (anchor) {
 			this.scroller.keepInPlace(anchor, change);
@@ -325,12 +304,6 @@ export class ChatView extends ItemView {
 
 	toggleWork(): void {
 		this.setShowWork(!this.showWork);
-	}
-
-	private renderWorkToggle(el: HTMLElement): void {
-		setIcon(el, this.showWork ? "brain" : "brain-circuit");
-		el.toggleClass("is-active", this.showWork);
-		setTooltip(el, this.showWork ? "Hide thinking and tool calls" : "Show thinking and tool calls");
 	}
 
 	focusInput(): void {
@@ -357,21 +330,21 @@ export class ChatView extends ItemView {
 	async loadSession(sessionId: string, title?: string, scroll?: number | null): Promise<void> {
 		this.reset(sessionId, title);
 		const session = this.session;
-		this.transcriptEl.empty();
-		const loading = this.transcriptEl.createDiv({ cls: "apollo-empty", text: "Loading chat…" });
+		this.transcript.reset();
+		const loading = this.transcript.placeholder("Loading chat…");
 		let messages: SessionMessage[];
 		try {
 			messages = await this.plugin.store.messages(sessionId);
 		} catch (err) {
 			if (session !== this.session) return;
 			loading.remove();
-			this.note(`Couldn't load this chat: ${errorMessage(err)}`, "apollo-error");
+			this.transcript.note(`Couldn't load this chat: ${errorMessage(err)}`, "apollo-error");
 			return;
 		}
 		if (session !== this.session) return;
 		loading.remove();
-		if (!messages.length) this.note("No messages found for this session. It may have been deleted.");
-		await this.renderHistory(messages);
+		if (!messages.length) this.transcript.note("No messages found for this session. It may have been deleted.");
+		await this.transcript.renderHistory(messages);
 		if (session !== this.session) return;
 		this.scroller.restore(scroll);
 		void this.refreshTitle();
@@ -392,7 +365,7 @@ export class ChatView extends ItemView {
 						: Promise.resolve({ behavior: "deny", message: "Chat closed." }),
 				ended: (err) => session === this.session && this.onSessionError(err),
 				released: () => session === this.session && this.updateInfo(),
-				beforeWrite: (id, input) => session === this.session && this.noteNewFile(id, input),
+				beforeWrite: (id, input) => session === this.session && this.transcript.noteNewFile(id, input),
 			},
 			newChatConfig(this.plugin.settings),
 		);
@@ -406,18 +379,10 @@ export class ChatView extends ItemView {
 		this.queued = [];
 		this.pendingCards = 0;
 		this.stopping = false;
-		this.textStream?.cancel();
-		this.textStream = null;
-		this.thinking = null;
-		this.textAwaitingUuid = [];
-		this.toolResults.clear();
-		this.newNotes.clear();
-		this.sections = [];
-		this.agentCalls.clear();
 		this.progress.idle();
-		this.transcriptEl.empty();
+		this.transcript.reset();
 		this.scroller.reset();
-		if (!sessionId) this.transcriptEl.createDiv({ cls: "apollo-empty", text: "New chat. Claude Code runs in this vault." });
+		if (!sessionId) this.transcript.placeholder("New chat. Claude Code runs in this vault.");
 		this.setTitle(title || NEW_CHAT_TITLE);
 		this.updateInfo();
 		this.setStatus("idle");
@@ -432,9 +397,9 @@ export class ChatView extends ItemView {
 		if (this.runApolloCommand(text)) return;
 		this.input.value = "";
 		this.app.workspace.requestSaveLayout();
-		this.transcriptEl.querySelector(".apollo-empty")?.remove();
-		const el = this.userBubble(text);
-		this.skillRowForCommand(text);
+		this.transcript.clearPlaceholder();
+		const el = this.transcript.userBubble(text);
+		this.transcript.skillRowForCommand(text);
 		// A queued message moves to the top when it goes out.
 		if (this.session.busy) {
 			el.addClass("is-queued");
@@ -455,7 +420,7 @@ export class ChatView extends ItemView {
 		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(titleFromPrompt(text));
 		try {
 			const uuid = await this.session.send(text);
-			for (const el of bubbles) this.addMessageActions(el, uuid, "user");
+			for (const el of bubbles) this.transcript.addMessageActions(el, uuid, "user");
 			this.updateInfo();
 		} catch (err) {
 			this.onSessionError(err);
@@ -479,12 +444,12 @@ export class ChatView extends ItemView {
 	}
 
 	private async onPermissionRequest(...[toolName, input, options]: Parameters<CanUseTool>): Promise<PermissionResult> {
-		this.finishStreaming();
+		this.transcript.finishStreaming();
 		this.pendingCards++;
 		this.refreshStatus();
 		try {
 			const decision = showPermissionCard(
-				this.transcriptEl,
+				this.transcript.el,
 				{ app: this.app, component: this, vaultPath: this.plugin.vaultPath(), takeFocus: this.hasFocus() },
 				{ toolName, input, options, autoMode: this.session.permissionMode === "auto" },
 			);
@@ -521,9 +486,9 @@ export class ChatView extends ItemView {
 	private syncMode(actual: PermissionMode): void {
 		if (actual === this.session.permissionMode) return;
 		if (this.session.permissionMode === "auto" && actual === "default") {
-			this.note("Auto mode isn't available for this model, so this chat uses Ask.");
+			this.transcript.note("Auto mode isn't available for this model, so this chat uses Ask.");
 		} else {
-			this.note(`Permission mode: ${PERMISSION_MODES[actual as keyof typeof PERMISSION_MODES] ?? actual}`);
+			this.transcript.note(`Permission mode: ${PERMISSION_MODES[actual as keyof typeof PERMISSION_MODES] ?? actual}`);
 		}
 		this.session.permissionMode = actual;
 		this.renderModeOptions();
@@ -542,11 +507,11 @@ export class ChatView extends ItemView {
 	}
 
 	private onSessionError(err: unknown): void {
-		this.finishStreaming();
+		this.transcript.finishStreaming();
 		// Background agents went with the process.
-		this.settleActivities(true);
+		this.transcript.settleActivities(true);
 		console.error("Apollo: Claude Code ended", err);
-		this.note(`Error: ${errorMessage(err)}`, "apollo-error");
+		this.transcript.note(`Error: ${errorMessage(err)}`, "apollo-error");
 		this.returnQueuedToInput();
 		this.stopping = false;
 		this.progress.idle();
@@ -559,7 +524,7 @@ export class ChatView extends ItemView {
 		this.progress.heartbeat();
 		if ("parent_tool_use_id" in msg && msg.parent_tool_use_id) {
 			// Subagent output isn't shown; the files it edits are listed with its call (RND-9).
-			if (msg.type === "assistant") this.agentEdits(msg.parent_tool_use_id, msg.message.content);
+			if (msg.type === "assistant") this.transcript.agentEdits(msg.parent_tool_use_id, msg.message.content);
 			return;
 		}
 		switch (msg.type) {
@@ -569,11 +534,11 @@ export class ChatView extends ItemView {
 			case "stream_event": {
 				const ev = msg.event;
 				this.progress.setRetry(null);
-				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.startText();
-				else if (ev.type === "content_block_start" && ev.content_block.type === "thinking") this.startThinking();
-				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.appendText(ev.delta.text);
-				else if (ev.type === "content_block_delta" && ev.delta.type === "thinking_delta") this.thinking?.append(ev.delta.thinking);
-				else if (ev.type === "content_block_stop") this.finishStreaming();
+				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.transcript.startText();
+				else if (ev.type === "content_block_start" && ev.content_block.type === "thinking") this.transcript.startThinking();
+				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.transcript.appendText(ev.delta.text);
+				else if (ev.type === "content_block_delta" && ev.delta.type === "thinking_delta") this.transcript.appendThinking(ev.delta.thinking);
+				else if (ev.type === "content_block_stop") this.transcript.finishStreaming();
 				// Deltas don't change the step; the line's own timer keeps its times current.
 				if (ev.type === "content_block_start" || ev.type === "content_block_stop") this.progress.refresh();
 				return;
@@ -581,19 +546,18 @@ export class ChatView extends ItemView {
 			case "assistant":
 				// Text arrives through stream events; tool calls are shown once their input is complete.
 				for (const block of msg.message.content) {
-					if (block.type === "tool_use") this.toolRow(block.id, block.name, block.input as Record<string, unknown>);
+					if (block.type === "tool_use") this.transcript.toolRow(block.id, block.name, block.input as Record<string, unknown>);
 					else if (block.type === "text") {
-						const el = this.textAwaitingUuid.shift();
-						if (el) this.addMessageActions(el, msg.uuid, "assistant");
+						this.transcript.textMessage(msg.uuid);
 					}
 				}
-				if (msg.error) this.note(`Error: ${msg.error}`, "apollo-error");
+				if (msg.error) this.transcript.note(`Error: ${msg.error}`, "apollo-error");
 				break;
 			case "user":
 				if (Array.isArray(msg.message.content)) {
 					for (const block of msg.message.content) {
 						if (block.type !== "tool_result") continue;
-						this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
+						this.transcript.toolResult(block.tool_use_id, block.is_error ?? false, block.content);
 					}
 				}
 				break;
@@ -604,35 +568,24 @@ export class ChatView extends ItemView {
 		this.progress.refresh();
 	}
 
-	/** Files a subagent edits, listed under its Agent call (RND-9). */
-	private agentEdits(parentId: string, content: SDKAssistantMessage["message"]["content"]): void {
-		const group = this.agentCalls.get(parentId);
-		if (!group) return;
-		for (const block of content) {
-			if (block.type !== "tool_use" || toolKind(block.name) !== "edit") continue;
-			const path = filePath(block.input as Record<string, unknown>);
-			if (path) group.addAgentEdit(path);
-		}
-	}
-
-	/** An agent finished, failed or was stopped: its call shows how, with its totals (RND-9). */
+	/** An agent finished, failed or was stopped (RND-9). */
 	private agentEnded(toolUseId: string, status: string, totals: string): void {
-		this.agentCalls.get(toolUseId)?.endAgent(toolUseId, status === "completed" ? "done" : status === "failed" ? "error" : "stopped", totals);
+		this.transcript.agentEnded(toolUseId, status, totals);
 		// Stop with only background agents running ends without a result.
 		if (this.stopping && !this.progress.inTurn && !this.session.working) {
 			this.stopping = false;
-			this.note("Stopped.");
+			this.transcript.note("Stopped.");
 		}
 	}
 
-	/** What the turn is waiting on: a reply streaming in, or the latest thinking or tool call (RND-8). */
-	private currentStep(): Step | null {
-		if (this.textStream) return { label: "Writing a reply", since: this.textStarted, kind: "text" };
-		for (const section of [...this.sections].reverse()) {
-			const step = section.current();
-			if (step) return step;
+	/** Forks the chat at a message, from its hover action (HIST-3a). */
+	private forkFrom(uuid: string, role: "user" | "assistant"): void {
+		const id = this.sessionId;
+		if (!id) {
+			new Notice("This chat has no session yet.");
+			return;
 		}
-		return null;
+		void this.plugin.forkChat(id, { uuid, role });
 	}
 
 	/** The `system` messages: session start, status, retries, agent tasks and denials. */
@@ -655,29 +608,27 @@ export class ChatView extends ItemView {
 			this.progress.setRetry(msg);
 		} else if (msg.subtype === "task_progress" && msg.tool_use_id) {
 			const task = this.session.tasks.byToolUse(msg.tool_use_id);
-			this.agentCalls.get(msg.tool_use_id)?.agentProgress(msg.tool_use_id, msg.summary || msg.description, msg.usage.tool_uses, task?.description ?? "");
+			this.transcript.agentProgress(msg.tool_use_id, msg.summary || msg.description, msg.usage.tool_uses, task?.description ?? "");
 		} else if (msg.subtype === "task_notification" && msg.tool_use_id) {
 			this.agentEnded(msg.tool_use_id, msg.status, msg.usage ? agentTotals(msg.usage.tool_uses, msg.usage.duration_ms) : "");
 		} else if (msg.subtype === "permission_denied") {
 			const who = msg.decision_reason_type === "classifier" ? "Auto mode" : "Claude Code";
-			this.note(`${who} denied ${msg.tool_name}${msg.decision_reason ? `: ${msg.decision_reason}` : ""}`);
+			this.transcript.note(`${who} denied ${msg.tool_name}${msg.decision_reason ? `: ${msg.decision_reason}` : ""}`);
 		}
 		// Agents starting and ending change whether the chat is working.
 		this.refreshStatus();
 	}
 
 	private onTurnEnd(subtype: string, durationMs: number): void {
-		this.finishStreaming();
-		this.settleActivities();
-		this.textAwaitingUuid = [];
+		this.transcript.endTurn();
 		this.progress.end();
 		const time = durationMs < 60_000 ? `${(durationMs / 1000).toFixed(1)}s` : formatDuration(durationMs);
 		const agents = this.session.tasks.size;
-		if (this.stopping) this.note("Stopped.");
+		if (this.stopping) this.transcript.note("Stopped.");
 		else {
 			const outcome = `${subtype === "success" ? "Done" : `Ended (${subtype})`} in ${time}`;
 			// Agents the turn started in the background carry on; Claude picks up when they report back (RND-9).
-			this.note(agents ? `${outcome}. ${agents === 1 ? "An agent is" : `${agents} agents are`} still working.` : outcome);
+			this.transcript.note(agents ? `${outcome}. ${agents === 1 ? "An agent is" : `${agents} agents are`} still working.` : outcome);
 		}
 		this.stopping = false;
 		// The chat list's "last updated", and Claude Code's generated title.
@@ -689,7 +640,7 @@ export class ChatView extends ItemView {
 		if (this.queued.length) {
 			const text = this.queued.map((q) => q.text).join("\n\n");
 			// Move the bubbles below this turn's output, where the new turn starts.
-			for (const q of this.queued) this.transcriptEl.appendChild(q.el).removeClass("is-queued");
+			for (const q of this.queued) this.transcript.el.appendChild(q.el).removeClass("is-queued");
 			const bubbles = this.queued.map((q) => q.el);
 			this.queued = [];
 			if (!this.scroller.following) this.scroller.anchorAtTop(bubbles[0]!);
@@ -697,202 +648,6 @@ export class ChatView extends ItemView {
 		} else {
 			this.refreshStatus();
 		}
-	}
-
-	/** Renders a saved transcript: user prompts, assistant text, thinking and tool rows. */
-	private async renderHistory(messages: SessionMessage[]): Promise<void> {
-		const renders: Promise<void>[] = [];
-		for (const msg of messages) {
-			if (msg.parent_tool_use_id) continue;
-			const blocks = contentBlocks(msg.message);
-			if (msg.type === "user") {
-				const texts: string[] = [];
-				for (const block of blocks) {
-					if (block.type === "tool_result" && block.tool_use_id) this.toolResults.get(block.tool_use_id)?.(block.is_error ?? false, resultText(block.content));
-					else if (block.type === "text" && block.text) texts.push(block.text);
-					else if (block.type === "image") texts.push("[Image]");
-				}
-				const text = texts.join("\n\n");
-				// A background agent reporting back (RND-9).
-				const report = taskNotification(text);
-				if (report) {
-					this.agentEnded(report.toolUseId, report.status, report.totals);
-					continue;
-				}
-				const prompt = displayPrompt(text);
-				if (prompt === INTERRUPTED) this.note("Stopped.");
-				else if (prompt) {
-					this.addMessageActions(this.userBubble(prompt), msg.uuid, "user");
-					this.skillRowForCommand(prompt);
-				}
-			} else if (msg.type === "assistant") {
-				for (const block of blocks) {
-					if (block.type === "text" && block.text) {
-						const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
-						renders.push(this.renderMarkdown(block.text, el.createDiv()));
-						this.addMessageActions(el, msg.uuid, "assistant");
-					} else if (block.type === "thinking" && block.thinking) {
-						const thinking = this.workSection().thinking();
-						thinking.append(block.thinking);
-						renders.push(thinking.finish());
-					} else if (block.type === "tool_use" && block.id && block.name) {
-						this.toolRow(block.id, block.name, block.input ?? {});
-					}
-				}
-			}
-		}
-		// Calls cut off by an interrupted turn never got a result, and agents that never reported back aren't running now.
-		this.settleActivities(true);
-		await Promise.all(renders);
-	}
-
-	/** Hover actions on a message: show or hide thinking and tool calls, and "Fork from here" (HIST-3a). */
-	private addMessageActions(el: HTMLElement, uuid: string, role: "user" | "assistant"): void {
-		if (el.querySelector(":scope > .apollo-msg-actions")) return;
-		const actions = el.createDiv({ cls: "apollo-msg-actions" });
-		const work = actions.createDiv({ cls: "clickable-icon apollo-work-toggle" });
-		this.renderWorkToggle(work);
-		this.registerDomEvent(work, "click", (evt) => {
-			evt.stopPropagation();
-			this.setShowWork(!this.showWork, el, true);
-		});
-		const fork = actions.createDiv({ cls: "clickable-icon" });
-		setIcon(fork, "git-branch");
-		setTooltip(fork, role === "user" ? "Fork from here, to edit and resend this message" : "Fork from here");
-		this.registerDomEvent(fork, "click", (evt) => {
-			evt.stopPropagation();
-			const id = this.sessionId;
-			if (!id) {
-				new Notice("This chat has no session yet.");
-				return;
-			}
-			void this.plugin.forkChat(id, { uuid, role });
-		});
-	}
-
-	private toolRow(id: string, name: string, input: Record<string, unknown>): void {
-		this.finishStreaming();
-		if (name === "Skill" && typeof input.skill === "string") {
-			// The model chose a skill (SLS-8).
-			const row = this.skillRow(input.skill);
-			this.toolResults.set(id, (isError) => row.addClass(isError ? "is-error" : "is-done"));
-			return;
-		}
-		// Consecutive calls share a group; anything shown after it starts a new one.
-		const target = this.workSection().activity();
-		target.add(id, name, input);
-		const agent = toolKind(name) === "agent";
-		if (agent) this.agentCalls.set(id, target);
-		this.toolResults.set(id, (isError, output) => {
-			// A background agent's call returns at once; its row runs until the agent ends (RND-9).
-			if (agent && !isError && (this.session.tasks.byToolUse(id)?.background || output.startsWith(BACKGROUND_AGENT))) {
-				target.background(id);
-				return;
-			}
-			target.finish(id, isError, output);
-			const created = this.newNotes.get(id);
-			this.newNotes.delete(id);
-			if (created && !isError) void this.autoPresent(created);
-		});
-	}
-
-	/** Remembers a Write that is about to create a note, when auto-present is on (OBS-19). */
-	private noteNewFile(id: string, input: Record<string, unknown>): void {
-		if (!this.plugin.settings.autoPresent || typeof input.file_path !== "string") return;
-		const rel = vaultRelative(input.file_path, this.plugin.vaultPath());
-		if (!rel || !rel.toLowerCase().endsWith(".md")) return;
-		// The call hasn't run yet, so an existing file means an overwrite.
-		if (!this.app.vault.getAbstractFileByPath(rel)) this.newNotes.set(id, rel);
-	}
-
-	private async autoPresent(path: string): Promise<void> {
-		try {
-			await this.presenter.presentNew(path);
-		} catch (err) {
-			console.warn("Apollo: couldn't present", path, err);
-		}
-	}
-
-	/** Marks calls that will never get a result as stopped. Background agents carry on unless `all`. */
-	private settleActivities(all = false): void {
-		for (const section of this.sections) section.settle(all);
-	}
-
-	/** The section for the next thinking block or tool call: the last one while nothing follows it, otherwise a new one. */
-	private workSection(): WorkSection {
-		const last = this.sections[this.sections.length - 1];
-		if (last && last.el === this.transcriptEl.lastElementChild) return last;
-		const section = new WorkSection(this.transcriptEl, this.app, this.plugin.vaultPath(), (text, el) => this.renderMarkdown(text, el));
-		if (this.expandWork && this.showWork) section.setOpen(true);
-		this.sections.push(section);
-		return section;
-	}
-
-	/** A "Skill: name" row linking to its SKILL.md (SLS-8). */
-	private skillRow(name: string): HTMLElement {
-		const row = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-tool apollo-skill" });
-		row.createSpan({ cls: "apollo-tool-name", text: "Skill" });
-		const path = this.plugin.catalogue.get(name)?.path;
-		const nameEl = row.createSpan({ cls: "apollo-tool-summary", text: name });
-		if (path) {
-			nameEl.addClass("apollo-ref");
-			nameEl.dataset.skillPath = path;
-			setTooltip(nameEl, path);
-		}
-		return row;
-	}
-
-	/** A skill row for a message that runs a skill as a slash command (SLS-8). */
-	private skillRowForCommand(text: string): void {
-		const name = /^\/(\S+)/.exec(text)?.[1];
-		const entry = name ? this.plugin.catalogue.get(name) : undefined;
-		if (entry?.kind === "skill") this.skillRow(entry.name).addClass("is-done");
-	}
-
-	private userBubble(text: string): HTMLElement {
-		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-user" });
-		renderWithReferences(el, text, this.app, this.plugin.vaultPath());
-		return el;
-	}
-
-	/** Renders Markdown, styled as the theme styles notes, then makes vault paths in it clickable (CTX-10). */
-	private async renderMarkdown(text: string, el: HTMLElement, component: Component = this): Promise<void> {
-		el.addClass("markdown-rendered");
-		await MarkdownRenderer.render(this.app, text, el, "", component);
-		linkifyPaths(el, this.app, this.plugin.vaultPath());
-	}
-
-	private onTranscriptClick(evt: MouseEvent): void {
-		const target = evt.target as HTMLElement | null;
-		const ref = target?.closest<HTMLElement>(".apollo-ref");
-		if (ref?.dataset.path) {
-			evt.preventDefault();
-			void openReference(this.app, ref.dataset.path, { line: Number(ref.dataset.line) || undefined, evt, from: this.leaf });
-			return;
-		}
-		if (ref?.dataset.skillPath) {
-			evt.preventDefault();
-			this.openSkillFile(ref.dataset.skillPath, evt);
-			return;
-		}
-		const link = target?.closest<HTMLAnchorElement>("a.internal-link");
-		if (link) {
-			evt.preventDefault();
-			const href = link.dataset.href ?? link.getAttribute("href");
-			if (href) void this.app.workspace.openLinkText(href, "", Keymap.isModEvent(evt) || "tab");
-		}
-	}
-
-	/** Opens a SKILL.md: as a note when Obsidian indexes it, otherwise in the system editor (dot-folders aren't indexed). */
-	private openSkillFile(path: string, evt: MouseEvent): void {
-		const rel = vaultRelative(path, this.plugin.vaultPath());
-		if (rel && this.app.vault.getFileByPath(rel)) {
-			void openReference(this.app, rel, { evt, from: this.leaf });
-			return;
-		}
-		void (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(path).then((error) => {
-			if (error) new Notice(`Couldn't open ${path}: ${error}`);
-		});
 	}
 
 	/**
@@ -1000,35 +755,6 @@ export class ChatView extends ItemView {
 			new Notice(`Couldn't switch effort: ${errorMessage(err)}`);
 		}
 		this.renderEffortOptions();
-	}
-
-	private startText(): void {
-		this.finishStreaming();
-		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
-		this.textStream = new MarkdownStream(el.createDiv({ cls: "markdown-rendered" }), (text, out, component) => this.renderMarkdown(text, out, component), this);
-		this.textStarted = Date.now();
-		this.textAwaitingUuid.push(el);
-	}
-
-	private appendText(text: string): void {
-		if (!this.textStream) this.startText();
-		this.textStream!.append(text);
-	}
-
-	private startThinking(): void {
-		this.finishStreaming();
-		this.thinking = this.workSection().thinking();
-	}
-
-	private finishStreaming(): void {
-		void this.thinking?.finish();
-		this.thinking = null;
-		void this.textStream?.finish();
-		this.textStream = null;
-	}
-
-	private note(text: string, cls = "apollo-note"): void {
-		this.transcriptEl.createDiv({ cls: `apollo-msg ${cls}`, text });
 	}
 
 	private async refreshTitle(): Promise<void> {
