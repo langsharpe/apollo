@@ -238,6 +238,7 @@ The vault currently has little frontmatter, so the emphasis is on tools that let
 | Claude CLI path | Device | Auto-detect (login shell `which claude`) |
 | Extra environment variables | Device | Empty |
 | Open new chats in | Vault | Split right |
+| Icon | Vault | Chat bot (options: Chat bot, Speech bubble, Sun, Orbit, Sparkles; Lucide `bot-message-square`, `message-square`, `sun`, `orbit`, `sparkles`) |
 | Prompt mode | Vault | Claude Code default |
 | Append / custom prompt note | Vault | Empty |
 | Output style | Vault | None |

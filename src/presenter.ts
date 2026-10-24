@@ -211,6 +211,11 @@ export class Presenter {
 		return this.app.workspace.createLeafInParent(group, index === -1 ? 0 : index + 1);
 	}
 
+	/** Shows the icon setting's new value on the presentation pane's marker. */
+	applyIcon(): void {
+		if (this.marker) setIcon(this.marker, this.settings().icon);
+	}
+
 	/** Marks a leaf as the presentation pane (OBS-17), or clears the mark. */
 	private setPane(leaf: WorkspaceLeaf | null): void {
 		if (this.pane === leaf) return;
@@ -227,7 +232,7 @@ export class Presenter {
 		if (!header) return;
 		header.addClass("apollo-presentation");
 		this.marker = createSpan({ cls: "apollo-presentation-marker" });
-		setIcon(this.marker, "bot");
+		setIcon(this.marker, this.settings().icon);
 		setTooltip(this.marker, `Apollo shows notes for “${this.chatTitle()}” here. Pin the tab to keep it.`);
 		const title = header.querySelector(".workspace-tab-header-inner-title");
 		if (title) title.after(this.marker);

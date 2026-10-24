@@ -86,6 +86,21 @@ export const PRESENT_PLACEMENTS = {
 
 export type PresentPlacement = keyof typeof PRESENT_PLACEMENTS;
 
+/**
+ * Icons Apollo can show for itself on the ribbon, chat tabs and menus, from
+ * Obsidian's bundled Lucide set. Subagent rows keep the bot icon whatever
+ * this is, because they are agents.
+ */
+export const APOLLO_ICONS = {
+	"bot-message-square": "Chat bot",
+	"message-square": "Speech bubble",
+	sun: "Sun",
+	orbit: "Orbit",
+	sparkles: "Sparkles",
+} as const;
+
+export type ApolloIcon = keyof typeof APOLLO_ICONS;
+
 export interface ApolloSettings {
 	/** Absolute path to the `claude` binary. Empty means auto-detect. */
 	cliPath: string;
@@ -114,6 +129,7 @@ export interface ApolloSettings {
 	autoPresent: boolean;
 	/** Show thinking and tool calls in chats that haven't been switched individually. */
 	showWork: boolean;
+	icon: ApolloIcon;
 }
 
 export const DEFAULT_SETTINGS: ApolloSettings = {
@@ -132,6 +148,7 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 	presentMaxPerTurn: 3,
 	autoPresent: false,
 	showWork: false,
+	icon: "bot-message-square",
 };
 
 /** Control keys for per-tool toggles, which are stored in `disabledObsidianTools`. */
@@ -165,6 +182,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 		// Tool toggles only show while the tools are on.
 		if (key === "obsidianTools") this.update();
 		if (key === "showWork") this.plugin.applyShowWork();
+		if (key === "icon") this.plugin.applyIcon();
 	}
 
 	/** None, then each output style Claude Code last reported. */
@@ -247,6 +265,15 @@ export class ApolloSettingTab extends PluginSettingTab {
 				name: "Show thinking and tool calls",
 				desc: "Show Claude's thinking and tool calls between messages. Off hides them; the status row still says what Claude is doing. Each chat can switch from a message's hover actions, its tab menu or the command.",
 				control: { type: "toggle", key: "showWork" satisfies keyof ApolloSettings },
+			},
+			{
+				name: "Icon",
+				desc: "Apollo's icon on the ribbon, chat tabs, the New chat button and Add to chat menus.",
+				control: {
+					type: "dropdown",
+					key: "icon" satisfies keyof ApolloSettings,
+					options: APOLLO_ICONS,
+				},
 			},
 			{
 				name: "Reference format",

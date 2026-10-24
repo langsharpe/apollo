@@ -148,7 +148,13 @@ export class ChatView extends ItemView {
 	}
 
 	override getIcon(): string {
-		return "bot";
+		return this.plugin.settings.icon;
+	}
+
+	/** Shows the icon setting's new value on the tab and the presentation pane's marker. */
+	applyIcon(): void {
+		(this.leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
+		this.presenter.applyIcon();
 	}
 
 	get sessionId(): string | null {

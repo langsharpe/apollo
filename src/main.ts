@@ -6,7 +6,7 @@ import { confirmAction, promptText } from "./modals";
 import { formatSelection } from "./references";
 import { SESSION_LIST_VIEW_TYPE, SessionListView } from "./session-list-view";
 import { SessionStore, type SessionMeta } from "./sessions";
-import { ApolloSettingTab, ApolloSettings, DEFAULT_SETTINGS, type ChatPlacement } from "./settings";
+import { APOLLO_ICONS, ApolloSettingTab, ApolloSettings, DEFAULT_SETTINGS, type ChatPlacement } from "./settings";
 
 interface PluginData extends Partial<ApolloSettings> {
 	sessionMeta?: Partial<SessionMeta>;
@@ -33,11 +33,16 @@ export default class ApolloPlugin extends Plugin {
 	/** The chat that last had focus, where "Add to chat" goes. */
 	private lastChat: WorkspaceLeaf | null = null;
 
+	/** The "New Apollo chat" ribbon button, which shows the icon setting. */
+	private ribbonEl: HTMLElement | null = null;
+
 	private readonly requestSave = debounce(() => void this.save(), 1000, true);
 
 	override async onload(): Promise<void> {
 		const { sessionMeta, catalogue, ...settings }: PluginData = (await this.loadData()) ?? {};
 		this.settings = { ...DEFAULT_SETTINGS, ...settings };
+		// An icon since dropped from the list falls back to the default.
+		if (!(this.settings.icon in APOLLO_ICONS)) this.settings.icon = DEFAULT_SETTINGS.icon;
 		this.store = new SessionStore(
 			() => this.vaultPath(),
 			{ pinned: sessionMeta?.pinned ?? [], forkedFrom: sessionMeta?.forkedFrom ?? {} },
@@ -144,7 +149,7 @@ export default class ApolloPlugin extends Plugin {
 					item
 						.setSection("action")
 						.setTitle("Add selection to chat")
-						.setIcon("bot")
+						.setIcon(this.settings.icon)
 						.onClick(() => void this.addSelection(editor, info.file!)),
 				);
 			}),
@@ -168,7 +173,7 @@ export default class ApolloPlugin extends Plugin {
 			for (const leaf of this.app.workspace.getLeavesOfType("empty")) leaf.view.containerEl.querySelector(".apollo-new-chat-action")?.remove();
 		});
 
-		this.addRibbonIcon("bot", "New Apollo chat", () => void this.openChat());
+		this.ribbonEl = this.addRibbonIcon(this.settings.icon, "New Apollo chat", () => void this.openChat());
 		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
 
 		this.registerEvent(this.app.workspace.on("quit", () => this.closeAll()));
@@ -250,7 +255,7 @@ export default class ApolloPlugin extends Plugin {
 			item
 				.setSection(section)
 				.setTitle(what ? `Add ${what} to chat` : "Add to chat")
-				.setIcon("bot")
+				.setIcon(this.settings.icon)
 				.onClick(() => void this.addToChat(files, "active")),
 		);
 		menu.addItem((item) =>
@@ -341,7 +346,7 @@ export default class ApolloPlugin extends Plugin {
 	}
 
 	/**
-	 * Adds "New chat" to each empty tab's actions, or updates its hotkey.
+	 * Adds "New chat" to each empty tab's actions, or updates its icon and hotkey.
 	 * Obsidian has no API for them, so this adds a button to core's list,
 	 * styled like core's own.
 	 */
@@ -352,6 +357,8 @@ export default class ApolloPlugin extends Plugin {
 			const list = leaf.view.containerEl.querySelector<HTMLElement>(".empty-state-action-list");
 			if (!list) continue;
 			const action = list.querySelector<HTMLElement>(".apollo-new-chat-action") ?? this.createEmptyTabAction(list, leaf);
+			const icon = action.querySelector<HTMLElement>(".text-button-icon");
+			if (icon) setIcon(icon, this.settings.icon);
 			action.querySelector(".empty-state-hotkey")?.remove();
 			if (hotkey) action.createSpan({ cls: "empty-state-hotkey", text: ` ${hotkey}` });
 		}
@@ -362,7 +369,7 @@ export default class ApolloPlugin extends Plugin {
 			cls: "text-icon-button tappable mod-pill empty-state-action apollo-new-chat-action",
 			attr: { tabindex: "0", role: "button", "aria-label": "New chat" },
 		});
-		setIcon(action.createSpan({ cls: "text-button-icon" }), "bot");
+		action.createSpan({ cls: "text-button-icon" });
 		action.createSpan({ cls: "text-button-label", text: "New chat" });
 		action.addEventListener("click", () => void this.openChatIn(leaf));
 		action.addEventListener("keydown", (e) => {
@@ -399,6 +406,24 @@ export default class ApolloPlugin extends Plugin {
 		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyShowWork();
 	}
 
+	/**
+	 * Shows the icon setting's new value everywhere it's already drawn. Menus
+	 * read the setting when they open.
+	 */
+	applyIcon(): void {
+		const { icon } = this.settings;
+		if (this.ribbonEl) {
+			setIcon(this.ribbonEl, icon);
+			// The ribbon keeps its own copy for its menu and redraws; update it too.
+			const ribbon = this.app.workspace.leftRibbon as unknown as RibbonInternals;
+			const item = ribbon.items?.find((i) => i.buttonEl === this.ribbonEl);
+			if (item) item.icon = icon;
+		}
+		this.addEmptyTabActions();
+		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyIcon();
+		this.repairGhostTabs();
+	}
+
 	private chatLeaves(): WorkspaceLeaf[] {
 		return this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
 	}
@@ -410,7 +435,7 @@ export default class ApolloPlugin extends Plugin {
 	 * restored in the background is deferred and shows the saved icon and
 	 * title until it's opened, and registering the view again only rebuilds
 	 * loaded tabs. So put the right header on deferred chats, without loading
-	 * them (TAB-4).
+	 * them (TAB-4). This also gives them a newly chosen icon.
 	 */
 	private repairGhostTabs(): void {
 		let repaired = false;
@@ -419,8 +444,8 @@ export default class ApolloPlugin extends Plugin {
 			const view = leaf.view as View & DeferredViewInternals;
 			const saved = leaf.getViewState().state?.title;
 			const title = typeof saved === "string" && saved ? saved : NEW_CHAT_TITLE;
-			if (view.icon === undefined || (view.icon === "bot" && view.title === title)) continue;
-			view.icon = "bot";
+			if (view.icon === undefined || (view.icon === this.settings.icon && view.title === title)) continue;
+			view.icon = this.settings.icon;
 			view.title = title;
 			(leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
 			repaired = true;
@@ -463,6 +488,11 @@ interface MenuInternals {
 /** Obsidian internals the public API doesn't expose. May be missing. */
 interface AppInternals {
 	hotkeyManager?: { printHotkeyForCommand?(id: string): string };
+}
+
+/** Obsidian internals the public API doesn't expose. May be missing. */
+interface RibbonInternals {
+	items?: { icon: string; buttonEl?: HTMLElement }[];
 }
 
 /** Obsidian internals the public API doesn't expose. May be missing. */
