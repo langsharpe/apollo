@@ -100,6 +100,9 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 /** Control keys for per-tool toggles, which are stored in `disabledObsidianTools`. */
 const TOOL_KEY = "obsidianTool:";
 
+/** The keys a setting control can use: a setting, or one Obsidian tool's switch. */
+type SettingKey = keyof ApolloSettings | `${typeof TOOL_KEY}${string}`;
+
 // The base PluginSettingTab reads `plugin.settings` by control key. Writes go
 // through the plugin, because data.json also holds chat metadata.
 export class ApolloSettingTab extends PluginSettingTab {
@@ -142,14 +145,14 @@ export class ApolloSettingTab extends PluginSettingTab {
 		return options;
 	}
 
-	override getSettingDefinitions(): SettingDefinitionItem[] {
+	override getSettingDefinitions(): SettingDefinitionItem<SettingKey>[] {
 		return [
 			{
 				name: "Claude CLI path",
 				desc: "Absolute path to the claude binary. Leave empty to auto-detect from your login shell.",
 				control: {
 					type: "text",
-					key: "cliPath" satisfies keyof ApolloSettings,
+					key: "cliPath",
 					validate: (value) => (value && !value.startsWith("/") ? "Must be an absolute path." : undefined),
 				},
 			},
@@ -167,7 +170,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Permission mode for new chats. Each chat can switch mode from its header. Auto needs a model that supports it; Haiku doesn't.",
 				control: {
 					type: "dropdown",
-					key: "defaultPermissionMode" satisfies keyof ApolloSettings,
+					key: "defaultPermissionMode",
 					options: PERMISSION_MODES,
 				},
 			},
@@ -176,7 +179,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Model for new chats. Each chat can switch model from its toolbar, or use /model for older versions.",
 				control: {
 					type: "dropdown",
-					key: "defaultModel" satisfies keyof ApolloSettings,
+					key: "defaultModel",
 					options: modelOptions(this.plugin.catalogue.models, this.plugin.settings.defaultModel),
 				},
 			},
@@ -185,7 +188,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "How much Claude thinks in new chats. Default uses each model's own level. Each chat can switch from its toolbar. Models without effort settings, like Haiku, ignore it.",
 				control: {
 					type: "dropdown",
-					key: "defaultEffort" satisfies keyof ApolloSettings,
+					key: "defaultEffort",
 					options: { default: "Default", ...EFFORT_LEVELS },
 				},
 			},
@@ -194,7 +197,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Output style for new chats.",
 				control: {
 					type: "dropdown",
-					key: "outputStyle" satisfies keyof ApolloSettings,
+					key: "outputStyle",
 					options: this.outputStyles(),
 				},
 			},
@@ -203,21 +206,21 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Where new chats, resumed chats and forks open.",
 				control: {
 					type: "dropdown",
-					key: "openChatsIn" satisfies keyof ApolloSettings,
+					key: "openChatsIn",
 					options: CHAT_PLACEMENTS,
 				},
 			},
 			{
 				name: "Show thinking and tool calls",
 				desc: "Show Claude's thinking and tool calls between messages. Off hides them; the status row still says what Claude is doing. Each chat can switch from a message's hover actions, its tab menu or the command.",
-				control: { type: "toggle", key: "showWork" satisfies keyof ApolloSettings },
+				control: { type: "toggle", key: "showWork" },
 			},
 			{
 				name: "Icon",
 				desc: "Apollo's icon on the ribbon, chat tabs, the New chat button and Add to chat menus.",
 				control: {
 					type: "dropdown",
-					key: "icon" satisfies keyof ApolloSettings,
+					key: "icon",
 					options: APOLLO_ICONS,
 				},
 			},
@@ -226,7 +229,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "How files and folders are added to the input, from @, drag and drop, paste and commands. A plain path costs nothing until Claude decides to read it; an @-mention attaches the file's contents to the message.",
 				control: {
 					type: "dropdown",
-					key: "referenceFormat" satisfies keyof ApolloSettings,
+					key: "referenceFormat",
 					options: REFERENCE_FORMATS,
 				},
 			},
@@ -235,7 +238,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Minutes before an idle chat stops its Claude Code process. The chat resumes on your next message. 0 keeps the process until the chat closes.",
 				control: {
 					type: "number",
-					key: "idleTimeoutMinutes" satisfies keyof ApolloSettings,
+					key: "idleTimeoutMinutes",
 					min: 0,
 					step: 1,
 				},
@@ -247,7 +250,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 					{
 						name: "Include Obsidian tools",
 						desc: "Gives Claude tools that use Obsidian's own API: links and backlinks, outlines, frontmatter and tag edits, link-safe moves, trash, and opening notes for you to look at. They run inside Obsidian, so there's no extra process. Read-only tools run without asking; the rest follow the chat's permission mode. Applies from a chat's next Claude Code process.",
-						control: { type: "toggle", key: "obsidianTools" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "obsidianTools" },
 					},
 					{
 						type: "page",
@@ -267,22 +270,22 @@ export class ApolloSettingTab extends PluginSettingTab {
 					{
 						name: "Present: default placement",
 						desc: "Where workspace_present opens a note when Claude doesn't say. Auto reuses a note already open, then this chat's presentation pane, then a tab beside your last note, and otherwise splits the chat.",
-						control: { type: "dropdown", key: "presentPlacement" satisfies keyof ApolloSettings, options: PRESENT_PLACEMENTS },
+						control: { type: "dropdown", key: "presentPlacement", options: PRESENT_PLACEMENTS },
 					},
 					{
 						name: "Present: focus the note",
 						desc: "Move the cursor to a presented note. Off keeps it where it was, usually the chat input.",
-						control: { type: "toggle", key: "presentFocus" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "presentFocus" },
 					},
 					{
 						name: "Present: max per turn",
 						desc: "Notes Claude can open for you in one turn. Past the limit, it lists them as links instead.",
-						control: { type: "number", key: "presentMaxPerTurn" satisfies keyof ApolloSettings, min: 1, step: 1 },
+						control: { type: "number", key: "presentMaxPerTurn", min: 1, step: 1 },
 					},
 					{
 						name: "Auto-present new notes",
 						desc: "Open notes Claude creates with Write, the same way as workspace_present, within the same limit.",
-						control: { type: "toggle", key: "autoPresent" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "autoPresent" },
 					},
 				],
 			},
