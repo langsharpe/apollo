@@ -14,7 +14,7 @@ import {
 } from "obsidian";
 import { z } from "zod";
 import { errorMessage, plural } from "./format";
-import { vaultRelative } from "./references";
+import { quotePath, vaultRelative } from "./references";
 
 /** The MCP server's name. Its tools reach Claude Code as `mcp__apollo__<tool>`. */
 export const VAULT_SERVER = "apollo";
@@ -246,7 +246,7 @@ function toolDefinitions(host: ToolHost) {
 					}
 					return changes.length > 0;
 				});
-				return text(changes.length ? `Frontmatter of ${q(file.path)}:\n${changes.join("\n")}` : `No changes: the frontmatter of ${q(file.path)} already matches.`);
+				return text(changes.length ? `Frontmatter of ${quotePath(file.path)}:\n${changes.join("\n")}` : `No changes: the frontmatter of ${quotePath(file.path)} already matches.`);
 			}),
 			{ ...rw("Edit frontmatter"), alwaysLoad: alwaysLoad("vault_frontmatter") },
 		),
@@ -282,7 +282,7 @@ function toolDefinitions(host: ToolHost) {
 					else delete fm.tags;
 					return true;
 				});
-				const lines = [same(before, after) ? `No changes: tags of ${q(file.path)} are ${show(before)}.` : `Tags of ${q(file.path)}: ${show(before)} → ${show(after)}`];
+				const lines = [same(before, after) ? `No changes: tags of ${quotePath(file.path)} are ${show(before)}.` : `Tags of ${quotePath(file.path)}: ${show(before)} → ${show(after)}`];
 				const inline = (app.metadataCache.getFileCache(file)?.tags ?? []).map((t) => t.tag.slice(1)).filter((t) => toRemove.includes(t.toLowerCase()));
 				if (inline.length) lines.push(`Still tagged inline in the body: ${[...new Set(inline)].map((t) => `#${t}`).join(", ")}. Edit the body to remove those.`);
 				if (invalid.length) lines.push(`Ignored, not valid tags: ${invalid.join(", ")}.`);
@@ -379,7 +379,7 @@ function toolDefinitions(host: ToolHost) {
 				await files.ensureFolder(parentOf(dest));
 				await app.fileManager.renameFile(item, dest);
 				const links = linking.size ? `Updated links in ${plural(linking.size, "note")}.` : "No other notes linked to it.";
-				return text(`Moved ${q(old)} → ${q(dest)}. ${links}`);
+				return text(`Moved ${quotePath(old)} → ${quotePath(dest)}. ${links}`);
 			}),
 			{ ...rw("Move or rename"), alwaysLoad: alwaysLoad("vault_move") },
 		),
@@ -394,7 +394,7 @@ function toolDefinitions(host: ToolHost) {
 				const count = item instanceof TFolder ? countFiles(item) : 0;
 				await app.fileManager.trashFile(item);
 				const where = TRASH_TEXT[getConfig(app, "trashOption") as string] ?? "moved to the trash, per the Deleted files setting";
-				const what = item instanceof TFolder ? `${q(item.path)} (${plural(count, "file")})` : q(item.path);
+				const what = item instanceof TFolder ? `${quotePath(item.path)} (${plural(count, "file")})` : quotePath(item.path);
 				const links = linking.size ? ` ${plural(linking.size, "note")} linked to it; those links are now unresolved.` : "";
 				return text(`Trashed ${what}: ${where}.${links}`);
 			}),
@@ -487,12 +487,12 @@ function toolDefinitions(host: ToolHost) {
 				if (tp) {
 					const created = await tp.templater.create_new_note_from_template(tpl, app.vault.getFolderByPath(parent || "/") ?? undefined, name, false);
 					if (!created) throw new ToolError("Templater didn't create the note. Check Obsidian for a Templater error.");
-					return text(`Created ${q(created.path)} from ${q(tpl.path)} with Templater.`);
+					return text(`Created ${quotePath(created.path)} from ${quotePath(tpl.path)} with Templater.`);
 				}
 				if (!core) throw new ToolError("Neither Templater nor core Templates is enabled.");
 				const content = fillCoreTemplate(await app.vault.read(tpl), name, core.options ?? {});
 				const created = await app.vault.create(dest, content);
-				return text(`Created ${q(created.path)} from ${q(tpl.path)} with core Templates.`);
+				return text(`Created ${quotePath(created.path)} from ${quotePath(tpl.path)} with core Templates.`);
 			}),
 			rw("Create from template"),
 		),
@@ -667,11 +667,6 @@ function show(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(show).join(", ")}]`;
 	if (typeof value === "string") return value === "" ? '""' : value;
 	return JSON.stringify(value);
-}
-
-/** A path as Apollo writes references: quoted if it has spaces, so the chat can make it a link. */
-function q(path: string): string {
-	return /\s/.test(path) ? `"${path}"` : path;
 }
 
 function parentOf(path: string): string {

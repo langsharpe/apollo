@@ -2,6 +2,7 @@ import type { CanUseTool, PermissionMode, PermissionResult, PermissionUpdate } f
 import { readFile } from "node:fs/promises";
 import { MarkdownRenderer, type App, type Component } from "obsidian";
 import { diffLines, withContext } from "./diff";
+import { vaultRelative } from "./references";
 
 export interface PermissionRequest {
 	toolName: string;
@@ -342,8 +343,7 @@ async function renderToolInput(el: HTMLElement, ctx: CardContext, toolName: stri
 
 /** Vault paths become links that open the file. */
 function renderPath(el: HTMLElement, ctx: CardContext, absPath: string): void {
-	const prefix = ctx.vaultPath.endsWith("/") ? ctx.vaultPath : `${ctx.vaultPath}/`;
-	const rel = absPath.startsWith(prefix) ? absPath.slice(prefix.length) : null;
+	const rel = vaultRelative(absPath, ctx.vaultPath) || null;
 	const file = rel ? ctx.app.vault.getFileByPath(rel) : null;
 	const row = el.createDiv({ cls: "apollo-card-path" });
 	if (file) {

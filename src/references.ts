@@ -13,6 +13,11 @@ export interface Reference {
 	line?: number;
 }
 
+/** A path as Apollo writes it into text: quoted if it has spaces, so Claude Code and the chat can both read it. */
+export function quotePath(path: string): string {
+	return /\s/.test(path) ? `"${path}"` : path;
+}
+
 /**
  * How a file or folder is written into a message (CTX-8). Folders end in `/`.
  * Paths with spaces are quoted, which Claude Code's @-mentions understand
@@ -20,13 +25,13 @@ export interface Reference {
  */
 export function formatReference(file: TAbstractFile, format: ReferenceFormat): string {
 	const path = file instanceof TFolder ? `${file.path}/` : file.path;
-	const quoted = /\s/.test(path) ? `"${path}"` : path;
+	const quoted = quotePath(path);
 	return format === "mention" ? `@${quoted}` : quoted;
 }
 
 /** A selection as `path:L10-L24` and the selected text as a quote (CTX-5). */
 export function formatSelection(file: TFile, fromLine: number, toLine: number, text: string): string {
-	const path = /\s/.test(file.path) ? `"${file.path}"` : file.path;
+	const path = quotePath(file.path);
 	const range = fromLine === toLine ? `L${fromLine}` : `L${fromLine}-L${toLine}`;
 	const quote = text.replace(/\n$/, "").split("\n").map((line) => `> ${line}`).join("\n");
 	return `${path}:${range}\n${quote}\n`;
