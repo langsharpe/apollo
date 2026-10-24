@@ -48,8 +48,7 @@ export interface ToolInfo {
 	available?(app: App): boolean;
 }
 
-/** Every Obsidian tool, in the order settings lists them. */
-export const OBSIDIAN_TOOLS: readonly ToolInfo[] = [
+const TOOL_INFO = [
 	{ name: "vault_links", summary: "Outgoing links, backlinks and unresolved links of a note, as Obsidian resolves them.", readOnly: true, alwaysLoad: true },
 	{ name: "vault_outline", summary: "Headings, block IDs, tags, embeds and frontmatter of a note, without its body.", readOnly: true },
 	{ name: "vault_frontmatter", summary: "Read, set or remove frontmatter properties, written by Obsidian so the YAML stays valid.", readOnly: false, alwaysLoad: true },
@@ -69,7 +68,13 @@ export const OBSIDIAN_TOOLS: readonly ToolInfo[] = [
 	},
 	{ name: "daily_note", summary: "The path of today's (or another day's) daily note.", readOnly: true, requires: "core Daily notes", available: (app) => !!dailyNotes(app) },
 	{ name: "bases_query", summary: "List bases, or the rows of a base view.", readOnly: true, requires: "core Bases", available: (app) => !!basesQuery(app) },
-];
+] as const satisfies readonly ToolInfo[];
+
+/** Every Obsidian tool name, derived from the registry so the tables keyed by it stay in step. */
+export type ToolName = (typeof TOOL_INFO)[number]["name"];
+
+/** Every Obsidian tool, in the order settings lists them. */
+export const OBSIDIAN_TOOLS: readonly (ToolInfo & { name: ToolName })[] = TOOL_INFO;
 
 /**
  * Shown to the model with the tools (OBS-11). Stands in for the Apollo
@@ -94,27 +99,12 @@ export interface VaultServer {
 export function createVaultServer(host: ToolHost): VaultServer {
 	const infos = OBSIDIAN_TOOLS.filter((t) => !host.disabled.includes(t.name) && (t.available?.(host.app) ?? true));
 	const defs = toolDefinitions(host);
-	const tools = infos.map((t) => defs[t.name as ToolName]);
+	const tools = infos.map((t) => defs[t.name]);
 	return {
 		server: createSdkMcpServer({ name: VAULT_SERVER, version: "1.0.0", instructions: INSTRUCTIONS, tools }),
 		readOnlyTools: infos.filter((t) => t.readOnly).map((t) => VAULT_TOOL_PREFIX + t.name),
 	};
 }
-
-type ToolName =
-	| "vault_links"
-	| "vault_outline"
-	| "vault_frontmatter"
-	| "vault_tags"
-	| "vault_query"
-	| "vault_move"
-	| "vault_trash"
-	| "workspace_context"
-	| "workspace_present"
-	| "dataview_query"
-	| "template_create"
-	| "daily_note"
-	| "bases_query";
 
 /** A failure to report to the agent as a tool error. */
 class ToolError extends Error {}

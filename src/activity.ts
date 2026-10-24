@@ -1,32 +1,69 @@
 import { setIcon, setTooltip, type App } from "obsidian";
 import { plural, truncate } from "./format";
 import { createReferenceEl, linkifyPaths, resolveReference } from "./references";
-import { VAULT_TOOL_PREFIX } from "./vault-tools";
+import { VAULT_TOOL_PREFIX, type ToolName } from "./vault-tools";
 import type { WorkSection } from "./work";
 
 /** What a tool call does, for a group's summary and progress line. */
 type Kind = "read" | "inspect" | "edit" | "move" | "trash" | "search" | "present" | "command" | "fetch" | "web" | "agent" | "other";
 
-/** Apollo's Obsidian tools (OBS-13): the row's name, and whether a result describes a change to show. */
-const VAULT_TOOLS: Record<string, { label: string; kind: Kind; changes?: boolean }> = {
-	vault_links: { label: "Links", kind: "inspect" },
-	vault_outline: { label: "Outline", kind: "inspect" },
-	vault_frontmatter: { label: "Frontmatter", kind: "edit", changes: true },
-	vault_tags: { label: "Tags", kind: "edit", changes: true },
-	vault_query: { label: "Query", kind: "search" },
-	vault_move: { label: "Move", kind: "move", changes: true },
-	vault_trash: { label: "Trash", kind: "trash", changes: true },
-	workspace_context: { label: "Workspace", kind: "other" },
-	workspace_present: { label: "Show note", kind: "present" },
-	dataview_query: { label: "Dataview", kind: "search" },
-	template_create: { label: "Template", kind: "edit", changes: true },
-	daily_note: { label: "Daily note", kind: "other" },
-	bases_query: { label: "Bases", kind: "search" },
+/** What an entry needs to word a progress line: the call's kind and its shortened input fields. */
+type ProgressText = { kind: Kind; str(key: string): string };
+
+/** "Moving notes/a.md": a verb, then its target if there is one. */
+function target(verb: string, value: string): string {
+	return value ? `${verb} ${value}` : verb;
+}
+
+interface VaultToolEntry {
+	/** The row's name. */
+	label: string;
+	kind: Kind;
+	/** Whether a result describes a change to show (OBS-13). */
+	changes?: boolean;
+	/** True when this call only reads, though the tool can write. */
+	readsOnly?(input: Record<string, unknown>): boolean;
+	/** Replaces the row's one-line description of the input. */
+	summary?(input: Record<string, unknown>, vaultPath: string): string;
+	/** What a running call is doing. */
+	progress(p: ProgressText): string;
+}
+
+/** Apollo's Obsidian tools (OBS-13). Keyed by `ToolName`, so adding a tool without an entry fails to compile. */
+const VAULT_TOOLS: Record<ToolName, VaultToolEntry> = {
+	vault_links: { label: "Links", kind: "inspect", progress: (p) => target("Reading links of", p.str("path")) },
+	vault_outline: { label: "Outline", kind: "inspect", progress: (p) => target("Outlining", p.str("path")) },
+	vault_frontmatter: {
+		label: "Frontmatter",
+		kind: "edit",
+		changes: true,
+		// With nothing to set or remove it only reads.
+		readsOnly: (input) => !input.set && !(Array.isArray(input.remove) && input.remove.length),
+		progress: (p) => target(p.kind === "inspect" ? "Reading properties of" : "Editing properties of", p.str("path")),
+	},
+	vault_tags: { label: "Tags", kind: "edit", changes: true, progress: (p) => target("Tagging", p.str("path")) },
+	vault_query: { label: "Query", kind: "search", progress: () => "Querying notes" },
+	vault_move: {
+		label: "Move",
+		kind: "move",
+		changes: true,
+		summary: (input, vaultPath) => `${shorten(String(input.from ?? ""), vaultPath, 55)} → ${shorten(String(input.to ?? ""), vaultPath, 55)}`,
+		progress: (p) => target("Moving", p.str("from")),
+	},
+	vault_trash: { label: "Trash", kind: "trash", changes: true, progress: (p) => target("Trashing", p.str("path")) },
+	workspace_context: { label: "Workspace", kind: "other", progress: () => "Checking open notes" },
+	workspace_present: { label: "Show note", kind: "present", progress: (p) => target("Opening", p.str("path")) },
+	dataview_query: { label: "Dataview", kind: "search", progress: () => "Running a Dataview query" },
+	template_create: { label: "Template", kind: "edit", changes: true, progress: (p) => target("Creating", p.str("path")) },
+	daily_note: { label: "Daily note", kind: "other", progress: () => "Finding the daily note" },
+	bases_query: { label: "Bases", kind: "search", progress: () => "Querying bases" },
 };
 
 /** An Obsidian tool's entry, or undefined for any other tool. */
-function vaultTool(name: string): (typeof VAULT_TOOLS)[string] | undefined {
-	return name.startsWith(VAULT_TOOL_PREFIX) ? VAULT_TOOLS[name.slice(VAULT_TOOL_PREFIX.length)] : undefined;
+function vaultTool(name: string): VaultToolEntry | undefined {
+	if (!name.startsWith(VAULT_TOOL_PREFIX)) return undefined;
+	const tool = name.slice(VAULT_TOOL_PREFIX.length);
+	return Object.hasOwn(VAULT_TOOLS, tool) ? VAULT_TOOLS[tool as ToolName] : undefined;
 }
 
 type CallState = "pending" | "done" | "error" | "stopped";
@@ -177,10 +214,9 @@ export class ActivityGroup {
 
 	add(id: string, name: string, input: Record<string, unknown>): void {
 		const vault = vaultTool(name);
-		// vault_frontmatter with nothing to set or remove only reads.
-		const readsOnly = vault?.label === "Frontmatter" && !input.set && !(Array.isArray(input.remove) && input.remove.length);
+		const readsOnly = vault?.readsOnly?.(input) ?? false;
 		const kind = readsOnly ? "inspect" : (vault?.kind ?? toolKind(name));
-		const summary = vault?.kind === "move" ? `${shorten(String(input.from ?? ""), this.vaultPath, 55)} → ${shorten(String(input.to ?? ""), this.vaultPath, 55)}` : toolSummary(input, this.vaultPath);
+		const summary = vault?.summary?.(input, this.vaultPath) ?? toolSummary(input, this.vaultPath);
 		const row = this.callsEl.createDiv({ cls: "apollo-tool" });
 		row.createSpan({ cls: "apollo-tool-name", text: vault?.label ?? name });
 		const path = vault ? this.existingPath(input.path) : filePath(input);
@@ -194,7 +230,7 @@ export class ActivityGroup {
 				if (full !== summary) setTooltip(el, full);
 			}
 		}
-		const progress = vault ? vaultProgress(name.slice(VAULT_TOOL_PREFIX.length), kind, input, this.vaultPath) : progressText(kind, name, input, this.vaultPath);
+		const progress = vault ? vault.progress({ kind, str: inputText(input, this.vaultPath) }) : progressText(kind, name, input, this.vaultPath);
 		this.callsById.set(id, { kind, state: "pending", row, path, progress, changes: !readsOnly && !!vault?.changes, vault: !!vault, started: Date.now(), background: false, detailEl: null });
 		if (path && (kind === "read" || kind === "inspect" || kind === "edit")) this.addFile(path, kind === "edit");
 		this.render();
@@ -346,10 +382,14 @@ export function summariseCalls(calls: Call[], thought = false): string {
 	return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** A getter for string fields of a tool's input, shortened for a progress line. */
+function inputText(input: Record<string, unknown>, vaultPath: string): (key: string) => string {
+	return (key) => (typeof input[key] === "string" ? shorten(input[key] as string, vaultPath, 60) : "");
+}
+
 /** "Reading notes/a.md": what a running call is doing. */
 function progressText(kind: Kind, name: string, input: Record<string, unknown>, vaultPath: string): string {
-	const str = (key: string) => (typeof input[key] === "string" ? shorten(input[key] as string, vaultPath, 60) : "");
-	const target = (verb: string, value: string) => (value ? `${verb} ${value}` : verb);
+	const str = inputText(input, vaultPath);
 	switch (kind) {
 		case "read":
 			return target("Reading", str("file_path"));
@@ -367,42 +407,6 @@ function progressText(kind: Kind, name: string, input: Record<string, unknown>, 
 			return target("Running agent:", str("description"));
 		default:
 			return `Using ${name}`;
-	}
-}
-
-/** "Moving notes/a.md": what a running Obsidian tool call is doing. */
-function vaultProgress(tool: string, kind: Kind, input: Record<string, unknown>, vaultPath: string): string {
-	const str = (key: string) => (typeof input[key] === "string" ? shorten(input[key] as string, vaultPath, 60) : "");
-	const target = (verb: string, value: string) => (value ? `${verb} ${value}` : verb);
-	switch (tool) {
-		case "vault_links":
-			return target("Reading links of", str("path"));
-		case "vault_outline":
-			return target("Outlining", str("path"));
-		case "vault_frontmatter":
-			return target(kind === "inspect" ? "Reading properties of" : "Editing properties of", str("path"));
-		case "vault_tags":
-			return target("Tagging", str("path"));
-		case "vault_query":
-			return "Querying notes";
-		case "vault_move":
-			return target("Moving", str("from"));
-		case "vault_trash":
-			return target("Trashing", str("path"));
-		case "workspace_context":
-			return "Checking open notes";
-		case "workspace_present":
-			return target("Opening", str("path"));
-		case "dataview_query":
-			return "Running a Dataview query";
-		case "template_create":
-			return target("Creating", str("path"));
-		case "daily_note":
-			return "Finding the daily note";
-		case "bases_query":
-			return "Querying bases";
-		default:
-			return `Using ${tool}`;
 	}
 }
 
