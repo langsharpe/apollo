@@ -94,8 +94,16 @@ export class ChatSession implements ChatConfig {
 	}
 
 	async setPermissionMode(mode: PermissionMode): Promise<void> {
+		// Set before awaiting: a status message confirming the switch can arrive first.
+		const previous = this.permissionMode;
 		this.permissionMode = mode;
-		await this.query?.setPermissionMode(mode);
+		try {
+			await this.query?.setPermissionMode(mode);
+		} catch (err) {
+			// Otherwise the next process would start in a mode the dropdown doesn't show.
+			this.permissionMode = previous;
+			throw err;
+		}
 	}
 
 	async setModel(model: string | null): Promise<void> {
