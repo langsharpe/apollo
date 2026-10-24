@@ -14,6 +14,7 @@ import { ProgressLine } from "./progress";
 import { MarkdownStream } from "./markdown-stream";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
+import { parseApolloCommand } from "./apollo-commands";
 import { effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
 import type { ThinkingBlock } from "./thinking";
 import { WorkSection } from "./work";
@@ -964,14 +965,14 @@ export class ChatView extends ItemView {
 	 * /effort and /mode. Returns true if the text was one of them.
 	 */
 	private runApolloCommand(text: string): boolean {
-		const m = /^\/(new|clear|fork|model|effort|mode)(?:\s+([\s\S]*))?$/.exec(text);
-		if (!m) return false;
-		const arg = m[2]?.trim() ?? "";
+		const command = parseApolloCommand(text);
+		if (!command) return false;
+		const { arg } = command;
 		const clearInput = () => {
 			this.input.value = "";
 			this.app.workspace.requestSaveLayout();
 		};
-		switch (m[1]) {
+		switch (command.name) {
 			case "new":
 			case "clear":
 				if (arg) return false;
