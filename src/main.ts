@@ -211,7 +211,12 @@ export default class ApolloPlugin extends Plugin {
 	async openChat(state: Partial<ChatViewState> = {}, placement: ChatPlacement = this.settings.openChatsIn): Promise<WorkspaceLeaf> {
 		const existing = state.sessionId ? this.chatLeaves().find((leaf) => leafSessionId(leaf) === state.sessionId) : undefined;
 		const leaf = existing ?? this.newLeaf(placement);
-		if (!existing) await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: { ...state } });
+		return this.showChat(leaf, existing ? undefined : state);
+	}
+
+	/** Focuses `leaf`, first making it a chat with `state` when one is given. */
+	private async showChat(leaf: WorkspaceLeaf, state?: Partial<ChatViewState>): Promise<WorkspaceLeaf> {
+		if (state) await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: { ...state } });
 		await this.focusLeaf(leaf);
 		return leaf;
 	}
@@ -239,7 +244,8 @@ export default class ApolloPlugin extends Plugin {
 		const leaves = this.chatLeaves();
 		// Before any chat has had focus (e.g. after a restart), prefer one that's on screen.
 		const fallback = leaves.find((l) => !l.isDeferred) ?? leaves[0] ?? null;
-		let leaf = target === "active" ? (this.lastChat && leaves.includes(this.lastChat) ? this.lastChat : fallback) : null;
+		let leaf: WorkspaceLeaf | null = null;
+		if (target === "active") leaf = this.lastChat && leaves.includes(this.lastChat) ? this.lastChat : fallback;
 		if (leaf) await this.focusLeaf(leaf);
 		else leaf = await this.openChat();
 		await leaf.loadIfDeferred();
@@ -311,6 +317,10 @@ export default class ApolloPlugin extends Plugin {
 		}
 	}
 
+	copySessionId(sessionId: string): void {
+		void navigator.clipboard.writeText(sessionId).then(() => new Notice("Session ID copied."));
+	}
+
 	async renameChat(sessionId: string, current: string): Promise<void> {
 		const title = await promptText(this.app, "Rename chat", current, "Rename");
 		if (!title || title === current) return;
@@ -351,8 +361,7 @@ export default class ApolloPlugin extends Plugin {
 
 	/** Replaces a leaf's view, such as an empty tab's, with a new chat. */
 	private async openChatIn(leaf: WorkspaceLeaf): Promise<void> {
-		await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: {} });
-		await this.focusLeaf(leaf);
+		await this.showChat(leaf, {});
 	}
 
 	/**
@@ -413,7 +422,7 @@ export default class ApolloPlugin extends Plugin {
 
 	/** Chats that follow the setting pick up its new value. */
 	applyShowWork(): void {
-		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyShowWork();
+		for (const view of this.chatViews()) view.applyShowWork();
 	}
 
 	/**
@@ -428,12 +437,17 @@ export default class ApolloPlugin extends Plugin {
 			setRibbonItemIcon(this.app, this.ribbonEl, icon);
 		}
 		this.addEmptyTabActions();
-		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyIcon();
+		for (const view of this.chatViews()) view.applyIcon();
 		this.repairGhostTabs();
 	}
 
 	private chatLeaves(): WorkspaceLeaf[] {
 		return this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+	}
+
+	/** The chats Obsidian has loaded; deferred tabs have no view yet. */
+	private chatViews(): ChatView[] {
+		return this.chatLeaves().flatMap((leaf) => (leaf.view instanceof ChatView ? [leaf.view] : []));
 	}
 
 	/**
