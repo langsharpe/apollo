@@ -1,6 +1,5 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import {
-	FileView,
 	MarkdownView,
 	TFile,
 	TFolder,
@@ -14,6 +13,7 @@ import {
 } from "obsidian";
 import { z } from "zod";
 import { errorMessage, plural } from "./format";
+import { leafFilePath } from "./workspace";
 import { cliHandler, communityPlugin, internalPlugin, vaultConfig } from "./obsidian-internals";
 import type { PresentRequest } from "./presenter";
 import { quotePath, vaultRelative } from "./references";
@@ -407,7 +407,7 @@ function toolDefinitions(host: ToolHost) {
 				const seen = new Set<string>();
 				workspace.iterateRootLeaves((leaf) => {
 					const state = leaf.getViewState();
-					const path = leaf.view instanceof FileView ? leaf.view.file?.path : typeof state.state?.file === "string" ? state.state.file : undefined;
+					const path = leafFilePath(leaf);
 					if (!path || seen.has(path)) return;
 					seen.add(path);
 					tabs.push({ path, ...(path === active?.path ? { active: true as const } : {}), ...(state.pinned ? { pinned: true as const } : {}), ...(path === presentation ? { presentation: true as const } : {}) });

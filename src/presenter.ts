@@ -1,5 +1,6 @@
 import { TFile, WorkspaceTabs, resolveSubpath, type WorkspaceSplit, setIcon, setTooltip, type App, type EventRef, type WorkspaceLeaf } from "obsidian";
 import { plural } from "./format";
+import { isInSidebar, leafFilePath } from "./workspace";
 import { indexInTabGroup, leafActiveTime, tabHeaderEl } from "./obsidian-internals";
 import type { ApolloSettings, PresentPlacement } from "./settings";
 
@@ -40,7 +41,7 @@ export class Presenter {
 	/** The note in the presentation pane, if the pane is still open. */
 	presentationPath(): string | null {
 		const pane = this.livePane();
-		return pane ? (this.fileOf(pane) ?? null) : null;
+		return pane ? (leafFilePath(pane) ?? null) : null;
 	}
 
 	/**
@@ -144,17 +145,10 @@ export class Presenter {
 	private findOpen(file: TFile): WorkspaceLeaf | null {
 		const matches: WorkspaceLeaf[] = [];
 		this.app.workspace.iterateAllLeaves((leaf) => {
-			if (this.fileOf(leaf) === file.path) matches.push(leaf);
+			if (leafFilePath(leaf) === file.path) matches.push(leaf);
 		});
 		// A tab in the chat's own tab group would replace the chat on screen; show a copy beside it instead.
 		return matches.find((leaf) => leaf.parent !== this.chatLeaf.parent || this.inSidebar()) ?? null;
-	}
-
-	private fileOf(leaf: WorkspaceLeaf): string | undefined {
-		const view = leaf.view as { file?: TFile | null };
-		if (view.file instanceof TFile) return view.file.path;
-		const state = leaf.getViewState().state?.file;
-		return typeof state === "string" ? state : undefined;
 	}
 
 	/** The presentation pane, unless it has been closed, pinned or dragged next to the chat. */
@@ -192,8 +186,7 @@ export class Presenter {
 	}
 
 	private inSidebar(): boolean {
-		const root = this.chatLeaf.getRoot();
-		return root === this.app.workspace.leftSplit || root === this.app.workspace.rightSplit;
+		return isInSidebar(this.app, this.chatLeaf);
 	}
 
 	private splitLeaf(): WorkspaceLeaf {

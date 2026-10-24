@@ -5,6 +5,7 @@ import { truncate } from "./format";
 import { InputMenu, type ChooseHow, type MenuRow } from "./input-menu";
 import type ApolloPlugin from "./main";
 import { draggedItem } from "./obsidian-internals";
+import { isInSidebar, leafFilePath } from "./workspace";
 import { findReferences, formatReference, isAbsolutePath, vaultRelative } from "./references";
 
 export interface ChatInputHandlers {
@@ -128,11 +129,9 @@ export class ChatInput {
 		const { workspace } = this.app;
 		workspace.iterateAllLeaves((leaf) => {
 			// Sidebar panels such as backlinks name a file too, but aren't open notes.
-			const root = leaf.getRoot();
-			if (root === workspace.leftSplit || root === workspace.rightSplit) return;
-			// Deferred tabs have no view yet, but their saved state names the file.
-			const path = leaf.getViewState().state?.file;
-			const file = typeof path === "string" ? this.app.vault.getFileByPath(path) : null;
+			if (isInSidebar(this.app, leaf)) return;
+			const path = leafFilePath(leaf);
+			const file = path ? this.app.vault.getFileByPath(path) : null;
 			if (file && !seen.has(file.path)) {
 				seen.add(file.path);
 				files.push(file);
