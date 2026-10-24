@@ -67,49 +67,57 @@ export class Presenter {
 		const prevLeaf = workspace.activeLeaf;
 		const prevEl = activeDocument.activeElement;
 
-		let leaf: WorkspaceLeaf;
-		let how: string;
-		const existing = this.findOpen(file);
+		const { leaf, how, existing } = this.chooseLeaf(file, placement);
 		if (existing) {
-			// (1) Never open a note twice.
-			leaf = existing;
 			await leaf.loadIfDeferred();
 			if (eState) leaf.setEphemeralState(eState);
-			how = "It was already open, so its tab was brought to the front";
 		} else {
-			const reuse = placement !== "tab" ? this.livePane() : null;
-			if (reuse) {
-				// (2) This chat's presentation pane, replacing its note.
-				leaf = reuse;
-				how = "Opened in the pane beside the chat, replacing the note shown there";
-			} else {
-				const near = placement !== "beside" ? this.recentNoteLeaf() : null;
-				if (near) {
-					// (3) A new tab beside the user's most recent note.
-					leaf = this.tabAfter(near);
-					how = "Opened in a new tab next to the user's notes";
-				} else if (placement === "tab" && !this.inSidebar()) {
-					leaf = this.tabAfter(this.chatLeaf);
-					how = "Opened in a new tab next to the chat";
-				} else {
-					// (4) Split the chat, or for a sidebar chat, a tab in the main area.
-					leaf = this.splitLeaf();
-					how = "Opened beside the chat";
-				}
-				if (placement !== "tab") this.setPane(leaf);
-			}
 			await leaf.openFile(file, { active: focus, ...(eState ? { eState } : {}) });
 		}
 		await workspace.revealLeaf(leaf);
-		if (focus) {
-			workspace.setActiveLeaf(leaf, { focus: true });
-		} else {
-			if (prevLeaf && workspace.activeLeaf !== prevLeaf) workspace.setActiveLeaf(prevLeaf, { focus: false });
-			if (prevEl instanceof HTMLElement && prevEl.isConnected && activeDocument.activeElement !== prevEl) prevEl.focus();
-		}
+		if (focus) workspace.setActiveLeaf(leaf, { focus: true });
+		else this.restoreFocus(prevLeaf, prevEl);
 		const where = line === undefined ? "" : req.heading && !missing ? ` at ${req.heading}` : ` at line ${line + 1}`;
 		const note = missing ? ` No heading or block "${req.heading}" was found, so it opened at the top.` : "";
 		return `${how}: ${file.path}${where}.${note}`;
+	}
+
+	/**
+	 * Picks where `file` opens (OBS-15): a leaf already showing it, this chat's
+	 * presentation pane, a tab beside the user's notes, or a split of the chat.
+	 * Makes any new leaf and marks it as the pane, but doesn't open the file.
+	 */
+	private chooseLeaf(file: TFile, placement: PresentPlacement): { leaf: WorkspaceLeaf; how: string; existing: boolean } {
+		// (1) Never open a note twice.
+		const open = this.findOpen(file);
+		if (open) return { leaf: open, how: "It was already open, so its tab was brought to the front", existing: true };
+		// (2) This chat's presentation pane, replacing its note.
+		const reuse = placement !== "tab" ? this.livePane() : null;
+		if (reuse) return { leaf: reuse, how: "Opened in the pane beside the chat, replacing the note shown there", existing: false };
+		let leaf: WorkspaceLeaf;
+		let how: string;
+		const near = placement !== "beside" ? this.recentNoteLeaf() : null;
+		if (near) {
+			// (3) A new tab beside the user's most recent note.
+			leaf = this.tabAfter(near);
+			how = "Opened in a new tab next to the user's notes";
+		} else if (placement === "tab" && !this.inSidebar()) {
+			leaf = this.tabAfter(this.chatLeaf);
+			how = "Opened in a new tab next to the chat";
+		} else {
+			// (4) Split the chat, or for a sidebar chat, a tab in the main area.
+			leaf = this.splitLeaf();
+			how = "Opened beside the chat";
+		}
+		if (placement !== "tab") this.setPane(leaf);
+		return { leaf, how, existing: false };
+	}
+
+	/** Gives focus back to where it was before presenting made a leaf active (OBS-16). */
+	private restoreFocus(prevLeaf: WorkspaceLeaf | null, prevEl: Element | null): void {
+		const { workspace } = this.app;
+		if (prevLeaf && workspace.activeLeaf !== prevLeaf) workspace.setActiveLeaf(prevLeaf, { focus: false });
+		if (prevEl instanceof HTMLElement && prevEl.isConnected && activeDocument.activeElement !== prevEl) prevEl.focus();
 	}
 
 	/**
