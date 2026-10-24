@@ -81,11 +81,6 @@ export interface CallSummary {
 	path: string | null;
 }
 
-/** "3 tools", or "" for none. Failures aren't counted: Claude usually just tries something else. */
-export function callsCount(calls: readonly unknown[]): string {
-	return calls.length ? plural(calls.length, "tool") : "";
-}
-
 const TOOL_KINDS: Record<string, Kind> = {
 	Read: "read",
 	Edit: "edit",

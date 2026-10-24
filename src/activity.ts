@@ -2,7 +2,7 @@ import { setIcon, setTooltip, type App } from "obsidian";
 import { plural } from "./format";
 import { createToggleHeader, setOpen } from "./collapsible";
 import { createReferenceEl, linkifyPaths, resolveReference } from "./references";
-import { callsCount, filePath, inputText, progressText, shorten, summariseCalls, toolKind, toolSummary, vaultTool, type CallSummary, type Kind, type Step } from "./tool-calls";
+import { filePath, inputText, progressText, shorten, summariseCalls, toolKind, toolSummary, vaultTool, type CallSummary, type Kind, type Step } from "./tool-calls";
 import type { WorkSection } from "./work";
 
 export interface Call {
@@ -63,9 +63,43 @@ export class FileLinks {
 	}
 }
 
-/** A before/after summary of a move, trash or property edit (OBS-13), with its paths as links. */
-export function addChange(parent: HTMLElement, text: string, app: App, vaultPath: string): void {
-	linkifyPaths(parent.createDiv({ cls: "apollo-activity-change", text }), app, vaultPath);
+/**
+ * The header a work section and an activity group share: a summary of the
+ * calls, the files read and edited as links, and the structural changes
+ * (OBS-13) with their paths as links.
+ */
+export class SummaryHeader {
+	private readonly labelEl: HTMLElement;
+	private readonly countEl: HTMLElement;
+	private readonly files: FileLinks;
+	private readonly changesEl: HTMLElement;
+
+	constructor(
+		el: HTMLElement,
+		private readonly app: App,
+		private readonly vaultPath: string,
+	) {
+		const header = createToggleHeader(el);
+		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
+		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
+		this.files = new FileLinks(el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
+		this.changesEl = el.createDiv({ cls: "apollo-activity-changes" });
+	}
+
+	addFile(path: string, edited: boolean): void {
+		this.files.add(path, edited);
+	}
+
+	/** A before/after summary of a move, trash or property edit. */
+	addChange(text: string): void {
+		linkifyPaths(this.changesEl.createDiv({ cls: "apollo-activity-change", text }), this.app, this.vaultPath);
+	}
+
+	/** Shows what the calls did so far, after "Thought" if `thought`, and how many there are. Failures aren't counted: Claude usually just tries something else. */
+	setCalls(calls: readonly (CallSummary)[], thought = false): void {
+		this.labelEl.setText(summariseCalls(calls, thought));
+		this.countEl.setText(calls.length ? plural(calls.length, "tool") : "");
+	}
 }
 
 /**
@@ -77,10 +111,7 @@ export function addChange(parent: HTMLElement, text: string, app: App, vaultPath
  */
 export class ActivityGroup {
 	readonly el: HTMLElement;
-	private readonly labelEl: HTMLElement;
-	private readonly countEl: HTMLElement;
-	private readonly files: FileLinks;
-	private readonly changesEl: HTMLElement;
+	private readonly summary: SummaryHeader;
 	private readonly callsEl: HTMLElement;
 	private readonly callsById = new Map<string, Call>();
 
@@ -92,11 +123,7 @@ export class ActivityGroup {
 		private readonly section: WorkSection,
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity" });
-		const header = createToggleHeader(this.el);
-		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
-		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
-		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
-		this.changesEl = this.el.createDiv({ cls: "apollo-activity-changes" });
+		this.summary = new SummaryHeader(this.el, app, vaultPath);
 		this.callsEl = this.el.createDiv({ cls: "apollo-activity-calls" });
 	}
 
@@ -145,7 +172,7 @@ export class ActivityGroup {
 		this.end(call, isError ? "error" : "done");
 		// Structural changes stay in view as a before/after summary (OBS-13).
 		if (call.changes && !isError && output && !output.startsWith("No changes")) {
-			addChange(this.changesEl, output, this.app, this.vaultPath);
+			this.summary.addChange(output);
 			this.section.addChange(output);
 		}
 		// Obsidian tools say why they failed in a sentence; show it with the call.
@@ -211,14 +238,13 @@ export class ActivityGroup {
 	}
 
 	private addFile(path: string, edited: boolean): void {
-		this.files.add(path, edited);
+		this.summary.addFile(path, edited);
 		this.section.addFile(path, edited);
 	}
 
 	private render(): void {
 		const calls = this.calls;
-		this.labelEl.setText(summariseCalls(calls));
-		this.countEl.setText(callsCount(calls));
+		this.summary.setCalls(calls);
 		this.section.update();
 	}
 }

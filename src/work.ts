@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, FileLinks } from "./activity";
-import { createToggleHeader, setOpen } from "./collapsible";
-import { callsCount, summariseCalls, type Step } from "./tool-calls";
+import { ActivityGroup, SummaryHeader } from "./activity";
+import { setOpen } from "./collapsible";
+import type { Step } from "./tool-calls";
 import { ThinkingBlock } from "./thinking";
 
 /**
@@ -14,10 +14,7 @@ import { ThinkingBlock } from "./thinking";
  */
 export class WorkSection {
 	readonly el: HTMLElement;
-	private readonly labelEl: HTMLElement;
-	private readonly countEl: HTMLElement;
-	private readonly files: FileLinks;
-	private readonly changesEl: HTMLElement;
+	private readonly summary: SummaryHeader;
 	private readonly bodyEl: HTMLElement;
 	private readonly groups: ActivityGroup[] = [];
 	private readonly thoughts: ThinkingBlock[] = [];
@@ -29,11 +26,7 @@ export class WorkSection {
 		private readonly render: (text: string, el: HTMLElement) => Promise<void>,
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity apollo-work" });
-		const header = createToggleHeader(this.el);
-		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
-		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
-		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
-		this.changesEl = this.el.createDiv({ cls: "apollo-activity-changes" });
+		this.summary = new SummaryHeader(this.el, app, vaultPath);
 		this.bodyEl = this.el.createDiv({ cls: "apollo-work-body" });
 	}
 
@@ -70,11 +63,11 @@ export class WorkSection {
 	}
 
 	addFile(path: string, edited: boolean): void {
-		this.files.add(path, edited);
+		this.summary.addFile(path, edited);
 	}
 
 	addChange(text: string): void {
-		addChange(this.changesEl, text, this.app, this.vaultPath);
+		this.summary.addChange(text);
 	}
 
 	/** Expands or collapses the section, leaving the rows inside as they are. */
@@ -91,7 +84,6 @@ export class WorkSection {
 		}
 		const calls = this.groups.flatMap((g) => g.calls);
 		const thoughts = this.thoughts.filter((t) => t.el.parentElement === this.bodyEl);
-		this.labelEl.setText(summariseCalls(calls, thoughts.length > 0));
-		this.countEl.setText(callsCount(calls));
+		this.summary.setCalls(calls, thoughts.length > 0);
 	}
 }
