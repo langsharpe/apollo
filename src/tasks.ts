@@ -16,6 +16,10 @@ export interface AgentTask {
 	background: boolean;
 }
 
+function newTask(id: string, toolUseId: string | null, description: string, background: boolean, now: number): AgentTask {
+	return { id, toolUseId, description, activity: "", toolUses: 0, started: now, lastEvent: now, background };
+}
+
 /**
  * The tasks a chat is waiting on, kept from Claude Code's task events. Shell
  * commands and ambient tasks (watchers, housekeeping) aren't counted: a
@@ -52,16 +56,7 @@ export class AgentTasks {
 		switch (msg.subtype) {
 			case "task_started":
 				if (msg.ambient || msg.skip_transcript || msg.task_type === "local_bash") return;
-				this.byId.set(msg.task_id, {
-					id: msg.task_id,
-					toolUseId: msg.tool_use_id ?? null,
-					description: msg.description,
-					activity: "",
-					toolUses: 0,
-					started: now,
-					lastEvent: now,
-					background: msg.is_backgrounded ?? false,
-				});
+				this.byId.set(msg.task_id, newTask(msg.task_id, msg.tool_use_id ?? null, msg.description, msg.is_backgrounded ?? false, now));
 				return;
 			case "task_progress": {
 				const task = this.byId.get(msg.task_id);
@@ -92,7 +87,7 @@ export class AgentTasks {
 				for (const t of live.values()) {
 					const task = this.byId.get(t.task_id);
 					if (task) task.background = true;
-					else this.byId.set(t.task_id, { id: t.task_id, toolUseId: null, description: t.description, activity: "", toolUses: 0, started: now, lastEvent: now, background: true });
+					else this.byId.set(t.task_id, newTask(t.task_id, null, t.description, true, now));
 				}
 				return;
 			}
