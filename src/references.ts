@@ -80,14 +80,14 @@ export function findReferences(text: string, app: App, vaultPath: string): Refer
 		let raw = quoted ? m[2]! : m[3]!;
 		let end = start + m[0].length;
 		if (!mention && !quoted && !/[/.]/.test(raw)) continue;
-		let ref = resolve(raw, app, vaultPath);
+		let ref = resolveReference(raw, app, vaultPath);
 		// "See Notes/a.md." ends a sentence, not the path.
 		if (!ref && !quoted) {
 			const trimmed = raw.replace(TRAILING_PUNCTUATION, "");
 			if (trimmed && trimmed !== raw) {
 				end -= raw.length - trimmed.length;
 				raw = trimmed;
-				ref = resolve(raw, app, vaultPath);
+				ref = resolveReference(raw, app, vaultPath);
 			}
 		}
 		if (ref) refs.push({ from: start, to: end, ...ref });
@@ -96,7 +96,7 @@ export function findReferences(text: string, app: App, vaultPath: string): Refer
 }
 
 /** Resolves one path token, with an optional `:L10` suffix, to a vault file or folder. */
-export function resolve(raw: string, app: App, vaultPath: string): Omit<Reference, "from" | "to"> | null {
+export function resolveReference(raw: string, app: App, vaultPath: string): Omit<Reference, "from" | "to"> | null {
 	let path = raw;
 	let line: number | undefined;
 	const suffix = LINE_SUFFIX.exec(path);
@@ -235,7 +235,7 @@ function findLinks(text: string): { from: number; to: number; url?: string; wiki
 export function linkifyPaths(root: HTMLElement, app: App, vaultPath: string): void {
 	for (const code of Array.from(root.querySelectorAll("code"))) {
 		if (code.closest("pre, a")) continue;
-		const ref = resolve(code.textContent?.trim() ?? "", app, vaultPath);
+		const ref = resolveReference(code.textContent?.trim() ?? "", app, vaultPath);
 		if (!ref) continue;
 		code.addClass("apollo-ref");
 		code.dataset.path = ref.path;

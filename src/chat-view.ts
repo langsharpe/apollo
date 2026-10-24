@@ -79,9 +79,9 @@ export class ChatView extends ItemView {
 	private mode: PermissionMode;
 	private title = NEW_CHAT_TITLE;
 	/** The model Claude Code reports using. */
-	private model: string | null = null;
+	private reportedModel: string | null = null;
 	/** The output style Claude Code reports using. */
-	private outputStyle: string | null = null;
+	private reportedOutputStyle: string | null = null;
 	private queued: { text: string; el: HTMLElement }[] = [];
 	private pendingCards = 0;
 	private stopping = false;
@@ -113,12 +113,12 @@ export class ChatView extends ItemView {
 	private stopBtn!: HTMLButtonElement;
 
 	// Streaming state for the current text block.
-	private block: MarkdownStream | null = null;
-	private blockStarted = 0;
+	private textStream: MarkdownStream | null = null;
+	private textStarted = 0;
 	/** The thinking block streaming now, if any. */
 	private thinking: ThinkingBlock | null = null;
 	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
-	private unidentified: HTMLElement[] = [];
+	private textAwaitingUuid: HTMLElement[] = [];
 	/** Marks a tool call done or failed, by tool_use id, with the result's text. */
 	private toolResults = new Map<string, (isError: boolean, output: string) => void>();
 	/** Write calls that will create a note, by tool_use id, for auto-present (OBS-19). */
@@ -454,7 +454,7 @@ export class ChatView extends ItemView {
 					session === this.session
 						? this.onPermissionRequest(toolName, input, options)
 						: Promise.resolve({ behavior: "deny", message: "Chat closed." }),
-				ended: (err) => session === this.session && this.onEnded(err),
+				ended: (err) => session === this.session && this.onSessionError(err),
 				released: () => session === this.session && this.updateInfo(),
 				beforeWrite: (id, input) => session === this.session && this.noteNewFile(id, input),
 			},
@@ -467,18 +467,18 @@ export class ChatView extends ItemView {
 		session.sessionId = sessionId;
 		this.session = session;
 		this.mode = this.plugin.settings.defaultPermissionMode;
-		this.model = null;
-		this.outputStyle = null;
+		this.reportedModel = null;
+		this.reportedOutputStyle = null;
 		this.renderModelOptions();
 		this.renderEffortOptions();
 		this.renderModeOptions();
 		this.queued = [];
 		this.pendingCards = 0;
 		this.stopping = false;
-		this.block?.cancel();
-		this.block = null;
+		this.textStream?.cancel();
+		this.textStream = null;
 		this.thinking = null;
-		this.unidentified = [];
+		this.textAwaitingUuid = [];
 		this.toolResults.clear();
 		this.newNotes.clear();
 		this.sections = [];
@@ -524,13 +524,13 @@ export class ChatView extends ItemView {
 		this.progress.begin(this.session.running ? null : "starting");
 		this.refreshStatus();
 		// Until Claude Code names the session, the first prompt is the title.
-		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(summarise(text));
+		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(titleFromPrompt(text));
 		try {
 			const uuid = await this.session.send(text);
-			for (const el of bubbles) this.addForkAction(el, uuid, "user");
+			for (const el of bubbles) this.addMessageActions(el, uuid, "user");
 			this.updateInfo();
 		} catch (err) {
-			this.onEnded(err);
+			this.onSessionError(err);
 		}
 	}
 
@@ -551,7 +551,7 @@ export class ChatView extends ItemView {
 	}
 
 	private async onPermissionRequest(...[toolName, input, options]: Parameters<CanUseTool>): Promise<PermissionResult> {
-		this.finishBlock();
+		this.finishStreaming();
 		this.pendingCards++;
 		this.refreshStatus();
 		try {
@@ -628,8 +628,8 @@ export class ChatView extends ItemView {
 		this.modeEl.value = this.mode;
 	}
 
-	private onEnded(err: unknown): void {
-		this.finishBlock();
+	private onSessionError(err: unknown): void {
+		this.finishStreaming();
 		// Background agents went with the process.
 		this.settleActivities(true);
 		console.error("Apollo: Claude Code ended", err);
@@ -655,8 +655,8 @@ export class ChatView extends ItemView {
 					// Claude Code starts a turn itself when a background agent reports back.
 					if (this.progress.inTurn) this.progress.setPhase(null);
 					else this.progress.begin();
-					this.model = msg.model;
-					this.outputStyle = msg.output_style;
+					this.reportedModel = msg.model;
+					this.reportedOutputStyle = msg.output_style;
 					this.updateInfo();
 					this.syncMode(msg.permissionMode);
 					// A new session now has an ID to save and list.
@@ -682,11 +682,11 @@ export class ChatView extends ItemView {
 			case "stream_event": {
 				const ev = msg.event;
 				this.progress.setRetry(null);
-				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.startBlock();
+				if (ev.type === "content_block_start" && ev.content_block.type === "text") this.startText();
 				else if (ev.type === "content_block_start" && ev.content_block.type === "thinking") this.startThinking();
-				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.appendBlock(ev.delta.text);
+				else if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") this.appendText(ev.delta.text);
 				else if (ev.type === "content_block_delta" && ev.delta.type === "thinking_delta") this.thinking?.append(ev.delta.thinking);
-				else if (ev.type === "content_block_stop") this.finishBlock();
+				else if (ev.type === "content_block_stop") this.finishStreaming();
 				// Deltas don't change the step; the line's own timer keeps its times current.
 				if (ev.type === "content_block_start" || ev.type === "content_block_stop") this.progress.refresh();
 				return;
@@ -696,8 +696,8 @@ export class ChatView extends ItemView {
 				for (const block of msg.message.content) {
 					if (block.type === "tool_use") this.toolRow(block.id, block.name, block.input as Record<string, unknown>);
 					else if (block.type === "text") {
-						const el = this.unidentified.shift();
-						if (el) this.addForkAction(el, msg.uuid, "assistant");
+						const el = this.textAwaitingUuid.shift();
+						if (el) this.addMessageActions(el, msg.uuid, "assistant");
 					}
 				}
 				if (msg.error) this.note(`Error: ${msg.error}`, "apollo-error");
@@ -740,7 +740,7 @@ export class ChatView extends ItemView {
 
 	/** What the turn is waiting on: a reply streaming in, or the latest thinking or tool call (RND-8). */
 	private currentStep(): Step | null {
-		if (this.block) return { label: "Writing a reply", since: this.blockStarted, kind: "text" };
+		if (this.textStream) return { label: "Writing a reply", since: this.textStarted, kind: "text" };
 		for (const section of [...this.sections].reverse()) {
 			const step = section.current();
 			if (step) return step;
@@ -749,9 +749,9 @@ export class ChatView extends ItemView {
 	}
 
 	private onTurnEnd(subtype: string, durationMs: number): void {
-		this.finishBlock();
+		this.finishStreaming();
 		this.settleActivities();
-		this.unidentified = [];
+		this.textAwaitingUuid = [];
 		this.progress.end();
 		const time = durationMs < 60_000 ? `${(durationMs / 1000).toFixed(1)}s` : formatDuration(durationMs);
 		const agents = this.session.tasks.size;
@@ -805,7 +805,7 @@ export class ChatView extends ItemView {
 				const prompt = displayPrompt(text);
 				if (prompt === INTERRUPTED) this.note("Stopped.");
 				else if (prompt) {
-					this.addForkAction(this.userBubble(prompt), msg.uuid, "user");
+					this.addMessageActions(this.userBubble(prompt), msg.uuid, "user");
 					this.skillRowForCommand(prompt);
 				}
 			} else if (msg.type === "assistant") {
@@ -813,7 +813,7 @@ export class ChatView extends ItemView {
 					if (block.type === "text" && block.text) {
 						const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
 						renders.push(this.renderMarkdown(block.text, el.createDiv()));
-						this.addForkAction(el, msg.uuid, "assistant");
+						this.addMessageActions(el, msg.uuid, "assistant");
 					} else if (block.type === "thinking" && block.thinking) {
 						const thinking = this.workSection().thinking();
 						thinking.append(block.thinking);
@@ -830,7 +830,7 @@ export class ChatView extends ItemView {
 	}
 
 	/** Hover actions on a message: show or hide thinking and tool calls, and "Fork from here" (HIST-3a). */
-	private addForkAction(el: HTMLElement, uuid: string, role: "user" | "assistant"): void {
+	private addMessageActions(el: HTMLElement, uuid: string, role: "user" | "assistant"): void {
 		if (el.querySelector(":scope > .apollo-msg-actions")) return;
 		const actions = el.createDiv({ cls: "apollo-msg-actions" });
 		const work = actions.createDiv({ cls: "clickable-icon apollo-work-toggle" });
@@ -854,7 +854,7 @@ export class ChatView extends ItemView {
 	}
 
 	private toolRow(id: string, name: string, input: Record<string, unknown>): void {
-		this.finishBlock();
+		this.finishStreaming();
 		if (name === "Skill" && typeof input.skill === "string") {
 			// The model chose a skill (SLS-8).
 			const row = this.skillRow(input.skill);
@@ -1076,7 +1076,7 @@ export class ChatView extends ItemView {
 		try {
 			await this.session.setModel(model);
 			// Init reported the old model; show the new one until the next process reports.
-			if (this.model) this.model = this.plugin.catalogue.models.find((m) => m.value === (model ?? "default"))?.resolvedModel ?? model ?? this.model;
+			if (this.reportedModel) this.reportedModel = this.plugin.catalogue.models.find((m) => m.value === (model ?? "default"))?.resolvedModel ?? model ?? this.reportedModel;
 			this.updateInfo();
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
@@ -1097,29 +1097,29 @@ export class ChatView extends ItemView {
 		this.renderEffortOptions();
 	}
 
-	private startBlock(): void {
-		this.finishBlock();
+	private startText(): void {
+		this.finishStreaming();
 		const el = this.transcriptEl.createDiv({ cls: "apollo-msg apollo-assistant" });
-		this.block = new MarkdownStream(el.createDiv({ cls: "markdown-rendered" }), (text, out, component) => this.renderMarkdown(text, out, component), this);
-		this.blockStarted = Date.now();
-		this.unidentified.push(el);
+		this.textStream = new MarkdownStream(el.createDiv({ cls: "markdown-rendered" }), (text, out, component) => this.renderMarkdown(text, out, component), this);
+		this.textStarted = Date.now();
+		this.textAwaitingUuid.push(el);
 	}
 
-	private appendBlock(text: string): void {
-		if (!this.block) this.startBlock();
-		this.block!.append(text);
+	private appendText(text: string): void {
+		if (!this.textStream) this.startText();
+		this.textStream!.append(text);
 	}
 
 	private startThinking(): void {
-		this.finishBlock();
+		this.finishStreaming();
 		this.thinking = this.workSection().thinking();
 	}
 
-	private finishBlock(): void {
+	private finishStreaming(): void {
 		void this.thinking?.finish();
 		this.thinking = null;
-		void this.block?.finish();
-		this.block = null;
+		void this.textStream?.finish();
+		this.textStream = null;
 	}
 
 	private note(text: string, cls = "apollo-note"): void {
@@ -1179,9 +1179,9 @@ export class ChatView extends ItemView {
 	private updateInfo(): void {
 		const id = this.sessionId;
 		const lines = id ? [] : ["New chat. No session yet."];
-		if (this.model) lines.push(`Model: ${this.model}`);
+		if (this.reportedModel) lines.push(`Model: ${this.reportedModel}`);
 		// PRM-1: what Claude Code reports once running, otherwise what the chat will ask for.
-		const style = this.outputStyle ?? this.session.outputStyle;
+		const style = this.reportedOutputStyle ?? this.session.outputStyle;
 		lines.push(`Output style: ${style && style !== "default" ? style : "none"}`);
 		if (id) lines.push(`Session: ${id.slice(0, 8)}`, this.session.running ? "Claude Code is running." : "Claude Code starts on your next message.", "Click to copy the full session ID.");
 		setTooltip(this.infoEl, lines.join("\n"), { placement: "top" });
@@ -1358,7 +1358,7 @@ export function userPrompt(message: unknown): string {
 }
 
 /** First line of a prompt, short enough for a tab title. */
-function summarise(text: string): string {
+function titleFromPrompt(text: string): string {
 	const line = text.split("\n").find((l) => l.trim())?.trim() ?? text;
 	return truncate(line, TITLE_LENGTH);
 }

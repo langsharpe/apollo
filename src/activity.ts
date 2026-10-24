@@ -1,6 +1,6 @@
 import { setIcon, setTooltip, type App } from "obsidian";
 import { plural, truncate } from "./format";
-import { createReferenceEl, linkifyPaths, resolve } from "./references";
+import { createReferenceEl, linkifyPaths, resolveReference } from "./references";
 import { VAULT_TOOL_PREFIX } from "./vault-tools";
 import type { WorkSection } from "./work";
 
@@ -102,7 +102,7 @@ export class FileLinks {
 			return;
 		}
 		const name = path.split("/").pop() || path;
-		const ref = resolve(path, this.app, this.vaultPath);
+		const ref = resolveReference(path, this.app, this.vaultPath);
 		let el: HTMLElement;
 		if (ref) {
 			el = createReferenceEl(this.el, "", ref);
@@ -186,7 +186,7 @@ export class ActivityGroup {
 		const path = vault ? this.existingPath(input.path) : filePath(input);
 		if (summary) {
 			// File tools' paths open the file (CTX-10).
-			const ref = resolve(summary, this.app, this.vaultPath);
+			const ref = resolveReference(summary, this.app, this.vaultPath);
 			if (ref) createReferenceEl(row, summary, ref).addClass("apollo-tool-summary");
 			else {
 				const el = row.createSpan({ cls: "apollo-tool-summary", text: summary });
@@ -269,7 +269,7 @@ export class ActivityGroup {
 
 	/** A path argument, if it names a file in the vault right now. */
 	private existingPath(value: unknown): string | null {
-		return typeof value === "string" && value && resolve(value, this.app, this.vaultPath) ? value : null;
+		return typeof value === "string" && value && resolveReference(value, this.app, this.vaultPath) ? value : null;
 	}
 
 	private addFile(path: string, edited: boolean): void {
@@ -279,7 +279,7 @@ export class ActivityGroup {
 
 	private render(): void {
 		const calls = this.calls;
-		this.labelEl.setText(summarise(calls));
+		this.labelEl.setText(summariseCalls(calls));
 		this.countEl.setText(callsCount(calls));
 		this.section.update();
 	}
@@ -319,7 +319,7 @@ export function filePath(input: Record<string, unknown>): string | null {
 }
 
 /** "Read 3 files, ran 2 commands": what a group did so far, after "Thought" if it also thought. */
-export function summarise(calls: Call[], thought = false): string {
+export function summariseCalls(calls: Call[], thought = false): string {
 	const count = (kind: Kind) => calls.filter((c) => c.kind === kind).length;
 	// File tools count distinct files, so reading a note twice is still one file.
 	const files = (kind: Kind) => new Set(calls.filter((c) => c.kind === kind).map((c, i) => c.path ?? i)).size;

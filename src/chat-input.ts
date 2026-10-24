@@ -26,8 +26,7 @@ interface AppInternals {
 	};
 }
 
-type SlashToken = { kind: "slash"; from: number; query: string };
-type FileToken = { kind: "file"; from: number; query: string };
+type Token = { kind: "slash" | "file"; from: number; query: string };
 
 const FILE_RESULTS = 50;
 const RECENT_FILES = 10;
@@ -54,7 +53,7 @@ export class ChatInput {
 	private readonly warningEl: HTMLElement;
 	private readonly slashMenu: InputMenu<CatalogueEntry>;
 	private readonly fileMenu: InputMenu<TAbstractFile>;
-	private token: SlashToken | FileToken | null = null;
+	private token: Token | null = null;
 	/** Token start where the menu was dismissed with Escape, so it stays closed while typing on. */
 	private dismissedAt: number | null = null;
 	/** Pasted or dropped paths outside the vault, flagged while they stay in the text (CTX-6). */
@@ -210,7 +209,7 @@ export class ChatInput {
 		this.updateMenus();
 	}
 
-	private currentToken(): SlashToken | FileToken | null {
+	private currentToken(): Token | null {
 		const { selectionStart: start, selectionEnd: end, value } = this.el;
 		if (start !== end) return null;
 		const before = value.slice(0, start);

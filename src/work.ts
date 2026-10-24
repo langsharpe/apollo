@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, setOpen, summarise, type Step } from "./activity";
+import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, setOpen, summariseCalls, type Step } from "./activity";
 import { ThinkingBlock } from "./thinking";
 
 /**
@@ -88,7 +88,7 @@ export class WorkSection {
 		}
 		const calls = this.groups.flatMap((g) => g.calls);
 		const thoughts = this.thoughts.filter((t) => t.el.parentElement === this.bodyEl);
-		this.labelEl.setText(summarise(calls, thoughts.length > 0));
+		this.labelEl.setText(summariseCalls(calls, thoughts.length > 0));
 		this.countEl.setText(callsCount(calls));
 	}
 }
