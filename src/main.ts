@@ -499,7 +499,7 @@ interface RibbonInternals {
 
 /** Obsidian internals the public API doesn't expose. May be missing. */
 interface LeafInternals {
-	/** Refreshes the tab's icon and title from the view. */
+	/** Refreshes the tab header's icon and title from the view, not the view header. */
 	updateHeader?(): void;
 }
 

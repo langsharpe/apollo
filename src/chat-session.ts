@@ -9,7 +9,9 @@ import { createVaultServer } from "./vault-tools";
 export interface ChatSessionHandlers {
 	message(msg: SDKMessage): void;
 	permission: CanUseTool;
-	/** The Claude Code process ended. `error` is set unless the session was closed on purpose. */
+	/**
+	 * The Claude Code process ended by itself, so `error` is always set. A deliberate close() never calls this.
+	 */
 	ended(error: unknown): void;
 	/** The process was stopped after sitting idle. The next message resumes the session. */
 	released(): void;

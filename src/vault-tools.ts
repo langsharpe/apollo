@@ -82,7 +82,7 @@ const INSTRUCTIONS = [
 	"Use workspace_present to show the user a note you want them to look at.",
 ].join(" ");
 
-/** Bridge plugins are checked once per session, so results can be cached per server. */
+/** A chat's MCP server and the full names of its read-only tools. */
 export interface VaultServer {
 	server: McpSdkServerConfigWithInstance;
 	/** Full names of the read-only tools on it, for `allowedTools`. */

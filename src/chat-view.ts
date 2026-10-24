@@ -42,7 +42,7 @@ export interface ChatViewState {
 /** Obsidian internals the public API doesn't expose. All may be missing. */
 interface LeafInternals {
 	tabHeaderEl?: HTMLElement;
-	/** Refreshes the tab's title, but not the view header's. */
+	/** Refreshes the tab header's icon and title from the view, not the view header. */
 	updateHeader?(): void;
 }
 
@@ -206,7 +206,6 @@ export class ChatView extends ItemView {
 
 		// References, wikilinks and skill rows open their file (CTX-9, CTX-10, SLS-8).
 		this.registerDomEvent(this.transcriptEl, "click", (evt) => this.onTranscriptClick(evt));
-
 
 		const form = root.createDiv({ cls: "apollo-input" });
 		this.input = new ChatInput(form, this.plugin, this, {

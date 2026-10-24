@@ -6,8 +6,9 @@ import { ThinkingBlock } from "./thinking";
  * A run of thinking and tool calls between messages, collapsed to one row
  * (RND-7). The header summarises what it did so far; what is happening now
  * shows in the status row at the end of the transcript (RND-8). The files
- * read and edited and any structural changes stay visible below it as links. Expanding it shows the thinking rows and activity
- * groups, which expand in turn. A run of one row shows just that row.
+ * read and edited and any structural changes stay visible below it as links.
+ * Expanding it shows the thinking rows and activity groups, which expand in
+ * turn. A run of one row shows just that row.
  */
 export class WorkSection {
 	readonly el: HTMLElement;

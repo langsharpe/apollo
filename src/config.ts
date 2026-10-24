@@ -21,10 +21,10 @@ export interface ChatState {
 }
 
 /**
- * Builds SDK options from plugin settings (spec §6). M1 covers the basics:
- * vault cwd, CLI path, login-shell PATH, settings sources and the chat's
- * permission mode. Obsidian tools come from M5. The prompt is always the
- * claude_code preset, optionally with an output style (M4, §4.4); custom and
+ * Maps plugin settings and a chat's state to SDK options (spec §6): vault
+ * cwd, CLI path, login-shell PATH, settings sources, the chat's permission
+ * mode, model and effort, and the Obsidian tools. The prompt is always the
+ * claude_code preset, optionally with an output style (§4.4); custom and
  * appended prompts aren't offered.
  */
 export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string, chat: ChatState): Options {
