@@ -49,11 +49,6 @@
 	line-height: var(--line-height-normal);
 }
 
-/* Thinking stays small, but gets the same line height. */
-.apollo-thinking-body {
-	line-height: var(--line-height-normal);
-}
-
 .apollo-msg .markdown-rendered > :first-child,
 .apollo-card-markdown > :first-child {
 	margin-top: 0;
@@ -117,8 +112,9 @@
 	display: none;
 }
 
-/* Tool calls: consecutive calls collapse into one activity group (RND-2). */
-.apollo-activity {
+/* Tool calls: consecutive calls collapse into one activity group (RND-2). Thinking rows (RND-6) share the base. */
+.apollo-activity,
+.apollo-thinking {
 	display: flex;
 	flex-direction: column;
 	gap: var(--size-2-1);
@@ -153,7 +149,7 @@
 	height: var(--icon-xs);
 }
 
-.apollo-activity.is-open > .apollo-activity-header .apollo-activity-chevron {
+.is-open > .apollo-activity-header .apollo-activity-chevron {
 	transform: rotate(90deg);
 }
 
@@ -361,21 +357,10 @@
 }
 
 /* Thinking (RND-6): a collapsed row like an activity group's header; the summary shows when expanded. */
-.apollo-thinking {
-	display: flex;
-	flex-direction: column;
-	gap: var(--size-2-1);
-	font-size: var(--font-ui-smaller);
-	color: var(--text-muted);
-	min-width: 0;
-}
-
-.apollo-thinking.is-open .apollo-activity-chevron {
-	transform: rotate(90deg);
-}
-
 .apollo-thinking-body {
 	display: none;
+	/* Thinking stays small, but gets the same line height as replies. */
+	line-height: var(--line-height-normal);
 	margin-left: calc(var(--icon-xs) / 2 - 1px);
 	padding-left: calc(var(--icon-xs) / 2 + 2 * var(--size-4-1) - 1px);
 	border-left: 1px solid var(--background-modifier-border);
