@@ -436,23 +436,17 @@ function sameEntries(a: CatalogueEntry[], b: CatalogueEntry[]): boolean {
 }
 
 /** The badge text for an entry's source. */
+const SOURCE_LABELS: Record<CommandSource, string> = {
+	apollo: "Apollo",
+	project: "Vault",
+	user: "User",
+	plugin: "Plugin",
+	"claude-code": "Claude Code",
+	"claude-ai": "claude.ai",
+	mcp: "MCP",
+	other: "Other",
+};
+
 export function sourceLabel(e: CatalogueEntry): string {
-	switch (e.source) {
-		case "apollo":
-			return "Apollo";
-		case "project":
-			return "Vault";
-		case "user":
-			return "User";
-		case "plugin":
-			return e.plugin ?? "Plugin";
-		case "claude-code":
-			return "Claude Code";
-		case "claude-ai":
-			return "claude.ai";
-		case "mcp":
-			return "MCP";
-		default:
-			return "Other";
-	}
+	return e.source === "plugin" ? (e.plugin ?? SOURCE_LABELS.plugin) : SOURCE_LABELS[e.source];
 }
