@@ -1,17 +1,11 @@
-import type { CanUseTool, EffortLevel, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, Options } from "@anthropic-ai/claude-agent-sdk";
+import type { ChatConfig } from "./chat-options";
 import type { ApolloSettings } from "./settings";
 import type { ShellEnv } from "./cli";
 import { VAULT_SERVER, type VaultServer } from "./vault-tools";
 
-export interface ChatState {
+export interface ChatState extends ChatConfig {
 	sessionId: string | null;
-	permissionMode: PermissionMode;
-	/** Model alias or ID. Null means Claude Code's default. */
-	model: string | null;
-	/** Effort level. Null means the model's default. */
-	effort: EffortLevel | null;
-	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
-	outputStyle: string;
 	abort: AbortController;
 	onPermissionRequest: CanUseTool;
 	/** Called before each Write runs, while the file is still in its old state (OBS-19). */

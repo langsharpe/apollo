@@ -1,4 +1,5 @@
 import type { EffortLevel, ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { ApolloSettings } from "./settings";
 
 /** Permission modes a chat can use (PRM-T1). Bypass is deliberately absent in v1. */
 export const PERMISSION_MODES = {
@@ -84,4 +85,21 @@ export function parseEffortArg(arg: string): EffortLevel | "default" | undefined
 /** The full model name Claude Code resolves a chat's model to, or the model itself if the list doesn't know it. */
 export function resolvedModelName(models: ModelInfo[], model: string | null): string | null {
 	return models.find((m) => m.value === orDefault(model))?.resolvedModel ?? model;
+}
+
+/** What a chat asks of Claude Code, kept by `ChatSession` and passed on to every process it starts. */
+export interface ChatConfig {
+	/** Mode for the next process start. Kept in step with what Claude Code reports. */
+	permissionMode: PermissionMode;
+	/** Model alias or ID. Null means Claude Code's default. */
+	model: string | null;
+	/** Effort level. Null means the model's default. */
+	effort: EffortLevel | null;
+	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
+	outputStyle: string;
+}
+
+/** The config a new chat starts with, from the settings. */
+export function newChatConfig(s: ApolloSettings): ChatConfig {
+	return { permissionMode: s.defaultPermissionMode, model: s.defaultModel, effort: nullIfDefault(s.defaultEffort), outputStyle: s.outputStyle };
 }

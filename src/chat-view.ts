@@ -15,7 +15,7 @@ import { MarkdownStream } from "./markdown-stream";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
 import { parseApolloCommand } from "./apollo-commands";
-import { effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
+import { newChatConfig, type ChatConfig, effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
 import type { ThinkingBlock } from "./thinking";
 import { WorkSection } from "./work";
 
@@ -23,20 +23,18 @@ export const CHAT_VIEW_TYPE = "apollo-chat";
 
 type Status = "idle" | "running" | "awaiting" | "error";
 
-/** What Obsidian saves for an open chat, so it comes back on restart (TAB-5). */
-export interface ChatViewState {
+/**
+ * What Obsidian saves for an open chat, so it comes back on restart (TAB-5).
+ * The config fields are those of `ChatConfig`, except that the permission mode
+ * is saved as `mode`, the key saved layouts already use.
+ */
+export interface ChatViewState extends Omit<ChatConfig, "permissionMode"> {
 	sessionId: string | null;
 	title: string;
 	draft: string;
 	/** Transcript scroll position, or null when scrolled to the end. */
 	scroll: number | null;
 	mode: PermissionMode;
-	/** Model alias or ID, or null for Claude Code's default. */
-	model: string | null;
-	/** Effort level, or null for the model's default. */
-	effort: EffortLevel | null;
-	/** Output style the chat started with; empty for Claude Code's default prompt. */
-	outputStyle: string;
 	/** Thinking and tool calls show in the transcript, or null to follow the setting. */
 	showWork: boolean | null;
 }
@@ -59,7 +57,6 @@ const ANCHOR_MARGIN = 8;
  */
 export class ChatView extends ItemView {
 	private session!: ChatSession;
-	private mode: PermissionMode;
 	private title = NEW_CHAT_TITLE;
 	/** The model Claude Code reports using. */
 	private reportedModel: string | null = null;
@@ -119,7 +116,6 @@ export class ChatView extends ItemView {
 		private readonly plugin: ApolloPlugin,
 	) {
 		super(leaf);
-		this.mode = plugin.settings.defaultPermissionMode;
 		this.presenter = new Presenter(this.app, () => plugin.settings, leaf, () => this.title);
 	}
 
@@ -255,7 +251,7 @@ export class ChatView extends ItemView {
 			title: this.title,
 			draft: this.input?.value ?? "",
 			scroll: this.scrollEl && !this.pinned ? this.scrollEl.scrollTop : null,
-			mode: this.mode,
+			mode: this.session?.permissionMode ?? this.plugin.settings.defaultPermissionMode,
 			model: this.session?.model ?? null,
 			effort: this.session?.effort ?? null,
 			outputStyle: this.session?.outputStyle ?? "",
@@ -267,8 +263,7 @@ export class ChatView extends ItemView {
 	override async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		const s = (state ?? {}) as Partial<ChatViewState>;
 		if (s.sessionId && s.sessionId !== this.sessionId) await this.loadSession(s.sessionId, s.title, s.scroll);
-		if (s.mode && s.mode !== this.mode) {
-			this.mode = s.mode;
+		if (s.mode && s.mode !== this.session.permissionMode) {
 			this.session.permissionMode = s.mode;
 			this.renderModeOptions();
 		}
@@ -430,6 +425,7 @@ export class ChatView extends ItemView {
 		// Late callbacks from a closed session must not touch the new chat.
 		const session: ChatSession = new ChatSession(
 			this.plugin,
+			this.presenter,
 			{
 				message: (msg) => session === this.session && this.handle(msg),
 				permission: (toolName, input, options) =>
@@ -440,15 +436,10 @@ export class ChatView extends ItemView {
 				released: () => session === this.session && this.updateInfo(),
 				beforeWrite: (id, input) => session === this.session && this.noteNewFile(id, input),
 			},
-			this.plugin.settings.defaultPermissionMode,
-			this.presenter,
-			this.plugin.settings.outputStyle,
-			this.plugin.settings.defaultModel,
-			nullIfDefault(this.plugin.settings.defaultEffort),
+			newChatConfig(this.plugin.settings),
 		);
 		session.sessionId = sessionId;
 		this.session = session;
-		this.mode = this.plugin.settings.defaultPermissionMode;
 		this.reportedModel = null;
 		this.reportedOutputStyle = null;
 		this.renderModelOptions();
@@ -540,7 +531,7 @@ export class ChatView extends ItemView {
 			const decision = showPermissionCard(
 				this.transcriptEl,
 				{ app: this.app, component: this, vaultPath: this.plugin.vaultPath(), takeFocus: this.hasFocus() },
-				{ toolName, input, options, autoMode: this.mode === "auto" },
+				{ toolName, input, options, autoMode: this.session.permissionMode === "auto" },
 			);
 			// A card needs an answer, so always bring it into view, without following the output after it.
 			this.setScrollTop(this.scrollEl.scrollHeight);
@@ -559,27 +550,26 @@ export class ChatView extends ItemView {
 	}
 
 	private async changeMode(mode: PermissionMode): Promise<void> {
-		const previous = this.mode;
-		this.mode = mode;
+		// The session records the mode at once, so the dropdown can show it while the switch is pending.
+		const switching = this.session.setPermissionMode(mode);
+		this.renderModeOptions();
 		try {
-			await this.session.setPermissionMode(mode);
+			await switching;
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
 			new Notice(`Couldn't switch permission mode: ${errorMessage(err)}`);
-			this.mode = previous;
-			this.renderModeOptions();
 		}
+		this.renderModeOptions();
 	}
 
 	/** Reflects the mode Claude Code reports, which can differ from the one asked for. */
 	private syncMode(actual: PermissionMode): void {
-		if (actual === this.mode) return;
-		if (this.mode === "auto" && actual === "default") {
+		if (actual === this.session.permissionMode) return;
+		if (this.session.permissionMode === "auto" && actual === "default") {
 			this.note("Auto mode isn't available for this model, so this chat uses Ask.");
 		} else {
 			this.note(`Permission mode: ${PERMISSION_MODES[actual as keyof typeof PERMISSION_MODES] ?? actual}`);
 		}
-		this.mode = actual;
 		this.session.permissionMode = actual;
 		this.renderModeOptions();
 	}
@@ -605,9 +595,10 @@ export class ChatView extends ItemView {
 		this.modeEl.empty();
 		const modes: Record<string, string> = { ...PERMISSION_MODES };
 		// Show modes the plugin doesn't offer (e.g. from settings) rather than misreporting them.
-		if (!(this.mode in modes)) modes[this.mode] = this.mode;
+		const current = this.session.permissionMode;
+		if (!(current in modes)) modes[current] = current;
 		for (const [value, text] of Object.entries(modes)) this.modeEl.createEl("option", { value, text });
-		this.modeEl.value = this.mode;
+		this.modeEl.value = current;
 	}
 
 	private onSessionError(err: unknown): void {
@@ -1014,7 +1005,6 @@ export class ChatView extends ItemView {
 				}
 				const mode = parseModeArg(arg);
 				if (mode) {
-					this.modeEl.value = mode;
 					void this.changeMode(mode);
 				} else {
 					new Notice(`Unknown mode “${arg}”. Use ask, accept-edits, plan or auto.`);
@@ -1049,7 +1039,6 @@ export class ChatView extends ItemView {
 		const options = Object.entries(PERMISSION_MODES).map(([value, label]) => ({ value, label }));
 		const choice = (await pickOne(this.app, options, "Choose a permission mode")) as PermissionMode | null;
 		if (!choice) return;
-		this.modeEl.value = choice;
 		await this.changeMode(choice);
 	}
 
