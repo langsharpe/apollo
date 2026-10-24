@@ -97,6 +97,8 @@ export class ChatView extends ItemView {
 	private spacer = 0;
 	/** This chat shows or hides thinking and tool calls regardless of the setting, or null to follow it. */
 	private workOverride: boolean | null = null;
+	/** Work sections open as they're added, after the brain icon or the status row showed them, until they're hidden again. */
+	private expandWork = false;
 
 	private infoEl!: HTMLElement;
 	private modelEl!: HTMLSelectElement;
@@ -177,6 +179,8 @@ export class ChatView extends ItemView {
 			tasks: () => this.session.tasks.list,
 			awaiting: () => this.pendingCards > 0,
 		});
+		// Double-clicking it shows or hides thinking and tool calls, expanded, like a message's brain icon (RND-10).
+		this.registerDomEvent(this.progress.el, "dblclick", () => this.setShowWork(!this.showWork, this.progress.el, true));
 		this.registerDomEvent(this.scrollEl, "scroll", () => this.onScroll());
 		// Output often grows after it's added (Markdown rendering, tool results), so follow every change while pinned.
 		const follow = () => {
@@ -332,9 +336,15 @@ export class ChatView extends ItemView {
 		return this.workOverride ?? this.plugin.settings.showWork;
 	}
 
-	/** Shows or hides thinking and tool calls in this chat. Matching the setting goes back to following it. */
-	setShowWork(show: boolean, anchor?: HTMLElement): void {
+	/**
+	 * Shows or hides thinking and tool calls in this chat. Matching the setting
+	 * goes back to following it. `expand` opens each section one level, to its
+	 * thinking rows and groups of tool calls; hiding closes them again.
+	 */
+	setShowWork(show: boolean, anchor?: HTMLElement, expand = false): void {
 		this.workOverride = show === this.plugin.settings.showWork ? null : show;
+		this.expandWork = show && expand;
+		if (this.expandWork || !show) for (const section of this.sections) section.setOpen(show);
 		this.applyShowWork(anchor);
 		this.app.workspace.requestSaveLayout();
 	}
@@ -820,7 +830,7 @@ export class ChatView extends ItemView {
 		this.renderWorkToggle(work);
 		this.registerDomEvent(work, "click", (evt) => {
 			evt.stopPropagation();
-			this.setShowWork(!this.showWork, el);
+			this.setShowWork(!this.showWork, el, true);
 		});
 		const fork = actions.createDiv({ cls: "clickable-icon" });
 		setIcon(fork, "git-branch");
@@ -889,6 +899,7 @@ export class ChatView extends ItemView {
 		const last = this.sections[this.sections.length - 1];
 		if (last && last.el === this.transcriptEl.lastElementChild) return last;
 		const section = new WorkSection(this.transcriptEl, this.app, this.plugin.vaultPath(), (text, el) => this.renderMarkdown(text, el));
+		if (this.expandWork && this.showWork) section.setOpen(true);
 		this.sections.push(section);
 		return section;
 	}

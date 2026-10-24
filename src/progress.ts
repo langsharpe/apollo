@@ -58,7 +58,7 @@ const RETRY_REASONS: Partial<Record<SDKAPIRetryMessage["error"], string>> = {
  * (RND-9).
  */
 export class ProgressLine {
-	private readonly el: HTMLElement;
+	readonly el: HTMLElement;
 	private readonly labelEl: HTMLElement;
 	private readonly warningEl: HTMLElement;
 	private readonly elapsedEl: HTMLElement;

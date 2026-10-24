@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, summarise, type Step } from "./activity";
+import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, setOpen, summarise, type Step } from "./activity";
 import { ThinkingBlock } from "./thinking";
 
 /**
@@ -72,6 +72,11 @@ export class WorkSection {
 
 	addChange(text: string): void {
 		addChange(this.changesEl, text, this.app, this.vaultPath);
+	}
+
+	/** Expands or collapses the section, leaving the rows inside as they are. */
+	setOpen(open: boolean): void {
+		setOpen(this.el, open);
 	}
 
 	/** Refreshes the header from the rows inside. */
