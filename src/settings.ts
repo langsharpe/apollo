@@ -1,63 +1,9 @@
-import type { EffortLevel, ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
+import { EFFORT_LEVELS, modelOptions, PERMISSION_MODES, type ChatPermissionMode } from "./chat-options";
 import type ApolloPlugin from "./main";
 import { OBSIDIAN_TOOLS } from "./vault-tools";
-
-/** Permission modes a chat can use (PRM-T1). Bypass is deliberately absent in v1. */
-export const PERMISSION_MODES = {
-	default: "Ask",
-	acceptEdits: "Accept edits",
-	plan: "Plan",
-	auto: "Auto",
-} as const satisfies Partial<Record<PermissionMode, string>>;
-
-export type ChatPermissionMode = keyof typeof PERMISSION_MODES;
-
-/** Models offered before Claude Code has reported its list, which carries the versions. */
-const FALLBACK_MODELS: Record<string, string> = { opus: "Opus", sonnet: "Sonnet", fable: "Fable", haiku: "Haiku" };
-
-/**
- * The models a chat offers in its toolbar and settings: Claude Code's
- * aliases, which follow the latest version of each family, labelled with
- * that version ("Opus 5.5"). Pinned and older models stay in /model. A
- * current model outside the list is added rather than misreported; null is
- * Claude Code's own default.
- */
-export function modelOptions(models: ModelInfo[], current: string | null): Record<string, string> {
-	const aliases = models.filter((m) => m.value !== "default" && !m.value.startsWith("claude-"));
-	const options = aliases.length ? Object.fromEntries(aliases.map((m) => [m.value, m.displayName])) : { ...FALLBACK_MODELS };
-	const value = current ?? "default";
-	if (!(value in options)) options[value] = models.find((m) => m.value === value)?.displayName ?? (current ?? "Default");
-	return options;
-}
-
-/** Effort levels, lowest first (TAB-8). */
-export const EFFORT_LEVELS = {
-	low: "Low",
-	medium: "Medium",
-	high: "High",
-	xhigh: "Extra high",
-	max: "Max",
-} as const satisfies Record<EffortLevel, string>;
-
-/**
- * The effort levels a model supports, from Claude Code's model list, after
- * "default" for the model's own default. Empty for a model without effort
- * (Haiku). Every level is offered until the list arrives. A current level
- * the model lacks is added rather than misreported; Claude Code runs it at
- * the nearest level the model has.
- */
-export function effortOptions(models: ModelInfo[], model: string | null, current: EffortLevel | null): Record<string, string> {
-	const value = model ?? "default";
-	const info = models.find((m) => m.value === value) ?? models.find((m) => m.resolvedModel === value);
-	const levels = info ? (info.supportedEffortLevels ?? []) : (Object.keys(EFFORT_LEVELS) as EffortLevel[]);
-	if (!levels.length) return {};
-	const options: Record<string, string> = { default: "Default" };
-	for (const level of levels) options[level] = EFFORT_LEVELS[level];
-	if (current && !(current in options)) options[current] = EFFORT_LEVELS[current];
-	return options;
-}
 
 /** Where new chats open (TAB-2). */
 export const CHAT_PLACEMENTS = {

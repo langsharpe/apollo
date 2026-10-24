@@ -14,7 +14,7 @@ import { ProgressLine } from "./progress";
 import { MarkdownStream } from "./markdown-stream";
 import { linkifyPaths, openReference, renderWithReferences, vaultRelative } from "./references";
 import { sessionTitle } from "./sessions";
-import { EFFORT_LEVELS, effortOptions, modelOptions, PERMISSION_MODES } from "./settings";
+import { effortOptions, modelOptions, nullIfDefault, orDefault, parseEffortArg, parseModeArg, PERMISSION_MODES, resolvedModelName } from "./chat-options";
 import type { ThinkingBlock } from "./thinking";
 import { WorkSection } from "./work";
 
@@ -206,9 +206,9 @@ export class ChatView extends ItemView {
 		// The tooltip shows a short ID, but `claude --resume` needs the full one.
 		this.registerDomEvent(this.infoEl, "click", () => this.copySessionId());
 		this.modelEl = toolbar.createEl("select", { cls: "dropdown apollo-model", attr: { "aria-label": "Model" } });
-		this.registerDomEvent(this.modelEl, "change", () => void this.changeModel(this.modelEl.value === "default" ? null : this.modelEl.value));
+		this.registerDomEvent(this.modelEl, "change", () => void this.changeModel(nullIfDefault(this.modelEl.value)));
 		this.effortEl = toolbar.createEl("select", { cls: "dropdown apollo-effort", attr: { "aria-label": "Effort" } });
-		this.registerDomEvent(this.effortEl, "change", () => void this.changeEffort(this.effortEl.value === "default" ? null : (this.effortEl.value as EffortLevel)));
+		this.registerDomEvent(this.effortEl, "change", () => void this.changeEffort(nullIfDefault(this.effortEl.value as EffortLevel | "default")));
 		// The first session reports the model list, with versions and effort levels.
 		this.registerEvent(
 			this.plugin.catalogue.onChanged(() => {
@@ -443,7 +443,7 @@ export class ChatView extends ItemView {
 			this.presenter,
 			this.plugin.settings.outputStyle,
 			this.plugin.settings.defaultModel,
-			this.plugin.settings.defaultEffort === "default" ? null : this.plugin.settings.defaultEffort,
+			nullIfDefault(this.plugin.settings.defaultEffort),
 		);
 		session.sessionId = sessionId;
 		this.session = session;
@@ -587,7 +587,7 @@ export class ChatView extends ItemView {
 		const current = this.session.model;
 		this.modelEl.empty();
 		for (const [value, text] of Object.entries(modelOptions(this.plugin.catalogue.models, current))) this.modelEl.createEl("option", { value, text });
-		this.modelEl.value = current ?? "default";
+		this.modelEl.value = orDefault(current);
 	}
 
 	/** Hidden for a model without effort levels. */
@@ -596,7 +596,7 @@ export class ChatView extends ItemView {
 		const options = effortOptions(this.plugin.catalogue.models, this.session.model, current);
 		this.effortEl.empty();
 		for (const [value, text] of Object.entries(options)) this.effortEl.createEl("option", { value, text: `${text} effort` });
-		this.effortEl.value = current ?? "default";
+		this.effortEl.value = orDefault(current);
 		this.effortEl.toggle(Object.keys(options).length > 0);
 	}
 
@@ -991,7 +991,7 @@ export class ChatView extends ItemView {
 			}
 			case "model":
 				clearInput();
-				if (arg) void this.changeModel(arg === "default" ? null : arg);
+				if (arg) void this.changeModel(nullIfDefault(arg));
 				else void this.pickModel();
 				return true;
 			case "effort": {
@@ -1000,9 +1000,8 @@ export class ChatView extends ItemView {
 					void this.pickEffort();
 					return true;
 				}
-				const level = arg.toLowerCase();
-				if (level === "default" || level === "auto") void this.changeEffort(null);
-				else if (level in EFFORT_LEVELS) void this.changeEffort(level as EffortLevel);
+				const level = parseEffortArg(arg);
+				if (level) void this.changeEffort(nullIfDefault(level));
 				else new Notice(`Unknown effort “${arg}”. Use low, medium, high, xhigh, max or default.`);
 				return true;
 			}
@@ -1012,7 +1011,7 @@ export class ChatView extends ItemView {
 					void this.pickMode();
 					return true;
 				}
-				const mode = modeFromArg(arg);
+				const mode = parseModeArg(arg);
 				if (mode) {
 					this.modeEl.value = mode;
 					void this.changeMode(mode);
@@ -1031,7 +1030,7 @@ export class ChatView extends ItemView {
 			? models.map((m) => ({ value: m.value, label: m.displayName, note: m.description }))
 			: [{ value: "default", label: "Default", note: "Claude Code's default model. The full list appears after a chat's first message." }];
 		const choice = await pickOne(this.app, options, "Choose a model for this chat");
-		if (choice) await this.changeModel(choice === "default" ? null : choice);
+		if (choice) await this.changeModel(nullIfDefault(choice));
 	}
 
 	private async pickEffort(): Promise<void> {
@@ -1042,7 +1041,7 @@ export class ChatView extends ItemView {
 		}
 		const options = Object.entries(levels).map(([value, label]) => ({ value, label, note: value === "default" ? "The model's own effort level." : undefined }));
 		const choice = await pickOne(this.app, options, "Choose an effort level for this chat");
-		if (choice) await this.changeEffort(choice === "default" ? null : (choice as EffortLevel));
+		if (choice) await this.changeEffort(nullIfDefault(choice as EffortLevel | "default"));
 	}
 
 	private async pickMode(): Promise<void> {
@@ -1057,7 +1056,7 @@ export class ChatView extends ItemView {
 		try {
 			await this.session.setModel(model);
 			// Init reported the old model; show the new one until the next process reports.
-			if (this.reportedModel) this.reportedModel = this.plugin.catalogue.models.find((m) => m.value === (model ?? "default"))?.resolvedModel ?? model ?? this.reportedModel;
+			if (this.reportedModel) this.reportedModel = resolvedModelName(this.plugin.catalogue.models, model) ?? this.reportedModel;
 			this.updateInfo();
 			this.app.workspace.requestSaveLayout();
 		} catch (err) {
@@ -1342,11 +1341,4 @@ export function userPrompt(message: unknown): string {
 function titleFromPrompt(text: string): string {
 	const line = text.split("\n").find((l) => l.trim())?.trim() ?? text;
 	return truncate(line, TITLE_LENGTH);
-}
-
-/** A permission mode from a /mode argument: ask, accept-edits, plan or auto. */
-function modeFromArg(arg: string): PermissionMode | null {
-	const key = arg.toLowerCase().replace(/[\s_-]/g, "");
-	const modes: Record<string, PermissionMode> = { ask: "default", default: "default", acceptedits: "acceptEdits", accept: "acceptEdits", plan: "plan", auto: "auto" };
-	return modes[key] ?? null;
 }
