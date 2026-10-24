@@ -4,6 +4,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { Events, debounce, parseYaml, type EventRef } from "obsidian";
+import { APOLLO_COMMANDS } from "./apollo-commands";
 
 /** Where an entry comes from. Shown as the badge in the slash menu. */
 export type CommandSource = "apollo" | "project" | "user" | "plugin" | "claude-code" | "claude-ai" | "mcp" | "other";
@@ -42,16 +43,6 @@ export interface CatalogueCache {
 	outputStyles?: string[];
 }
 
-/** Commands Apollo handles itself and never sends (SLS-6). */
-export const APOLLO_COMMANDS: CatalogueEntry[] = [
-	{ name: "new", description: "Start a new chat in this pane. The current one stays in the chat list.", argumentHint: "", kind: "apollo", source: "apollo" },
-	{ name: "clear", description: "Same as /new: a fresh session in this pane.", argumentHint: "", kind: "apollo", source: "apollo" },
-	{ name: "fork", description: "Fork this chat into a new tab.", argumentHint: "", kind: "apollo", source: "apollo" },
-	{ name: "model", description: "Set the model for this chat.", argumentHint: "[model]", kind: "apollo", source: "apollo" },
-	{ name: "effort", description: "Set the effort level for this chat.", argumentHint: "[low|medium|high|xhigh|max|default]", kind: "apollo", source: "apollo" },
-	{ name: "mode", description: "Set the permission mode for this chat.", argumentHint: "[ask|accept-edits|plan|auto]", kind: "apollo", source: "apollo" },
-];
-
 /**
  * Claude Code commands that only make sense in a terminal, or that Apollo
  * replaces (SLS-7). Claude Code tags some itself in `terminal_slash_commands`;
@@ -78,12 +69,9 @@ const HIDDEN = new Set([
 	"reload-plugins",
 	// Server-launched sessions only.
 	"workflow-launch-exec",
-	// Apollo's own versions.
-	"new",
+	// Apollo's own versions, and Claude Code's alias for /clear.
+	...APOLLO_COMMANDS.map((e) => e.name),
 	"reset",
-	"clear",
-	"model",
-	"effort",
 ]);
 
 /** Directories scanned for skills and commands (SLS-3). */
@@ -448,23 +436,17 @@ function sameEntries(a: CatalogueEntry[], b: CatalogueEntry[]): boolean {
 }
 
 /** The badge text for an entry's source. */
+const SOURCE_LABELS: Record<CommandSource, string> = {
+	apollo: "Apollo",
+	project: "Vault",
+	user: "User",
+	plugin: "Plugin",
+	"claude-code": "Claude Code",
+	"claude-ai": "claude.ai",
+	mcp: "MCP",
+	other: "Other",
+};
+
 export function sourceLabel(e: CatalogueEntry): string {
-	switch (e.source) {
-		case "apollo":
-			return "Apollo";
-		case "project":
-			return "Vault";
-		case "user":
-			return "User";
-		case "plugin":
-			return e.plugin ?? "Plugin";
-		case "claude-code":
-			return "Claude Code";
-		case "claude-ai":
-			return "claude.ai";
-		case "mcp":
-			return "MCP";
-		default:
-			return "Other";
-	}
+	return e.source === "plugin" ? (e.plugin ?? SOURCE_LABELS.plugin) : SOURCE_LABELS[e.source];
 }

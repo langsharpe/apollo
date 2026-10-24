@@ -1,4 +1,5 @@
 import { Keymap, TFile, TFolder, normalizePath, setIcon, type App, type PaneType, type TAbstractFile, type WorkspaceLeaf } from "obsidian";
+import { internalPlugin } from "./obsidian-internals";
 import type { ReferenceFormat } from "./settings";
 
 /** A file or folder reference found in text. */
@@ -13,6 +14,11 @@ export interface Reference {
 	line?: number;
 }
 
+/** A path as Apollo writes it into text: quoted if it has spaces, so Claude Code and the chat can both read it. */
+export function quotePath(path: string): string {
+	return /\s/.test(path) ? `"${path}"` : path;
+}
+
 /**
  * How a file or folder is written into a message (CTX-8). Folders end in `/`.
  * Paths with spaces are quoted, which Claude Code's @-mentions understand
@@ -20,13 +26,13 @@ export interface Reference {
  */
 export function formatReference(file: TAbstractFile, format: ReferenceFormat): string {
 	const path = file instanceof TFolder ? `${file.path}/` : file.path;
-	const quoted = /\s/.test(path) ? `"${path}"` : path;
+	const quoted = quotePath(path);
 	return format === "mention" ? `@${quoted}` : quoted;
 }
 
 /** A selection as `path:L10-L24` and the selected text as a quote (CTX-5). */
 export function formatSelection(file: TFile, fromLine: number, toLine: number, text: string): string {
-	const path = /\s/.test(file.path) ? `"${file.path}"` : file.path;
+	const path = quotePath(file.path);
 	const range = fromLine === toLine ? `L${fromLine}` : `L${fromLine}-L${toLine}`;
 	const quote = text.replace(/\n$/, "").split("\n").map((line) => `> ${line}`).join("\n");
 	return `${path}:${range}\n${quote}\n`;
@@ -75,14 +81,14 @@ export function findReferences(text: string, app: App, vaultPath: string): Refer
 		let raw = quoted ? m[2]! : m[3]!;
 		let end = start + m[0].length;
 		if (!mention && !quoted && !/[/.]/.test(raw)) continue;
-		let ref = resolve(raw, app, vaultPath);
+		let ref = resolveReference(raw, app, vaultPath);
 		// "See Notes/a.md." ends a sentence, not the path.
 		if (!ref && !quoted) {
 			const trimmed = raw.replace(TRAILING_PUNCTUATION, "");
 			if (trimmed && trimmed !== raw) {
 				end -= raw.length - trimmed.length;
 				raw = trimmed;
-				ref = resolve(raw, app, vaultPath);
+				ref = resolveReference(raw, app, vaultPath);
 			}
 		}
 		if (ref) refs.push({ from: start, to: end, ...ref });
@@ -91,7 +97,7 @@ export function findReferences(text: string, app: App, vaultPath: string): Refer
 }
 
 /** Resolves one path token, with an optional `:L10` suffix, to a vault file or folder. */
-export function resolve(raw: string, app: App, vaultPath: string): Omit<Reference, "from" | "to"> | null {
+export function resolveReference(raw: string, app: App, vaultPath: string): Omit<Reference, "from" | "to"> | null {
 	let path = raw;
 	let line: number | undefined;
 	const suffix = LINE_SUFFIX.exec(path);
@@ -147,17 +153,13 @@ function noteLeaf(app: App, from?: WorkspaceLeaf): WorkspaceLeaf {
 	return from ? workspace.createLeafBySplit(from, "vertical") : workspace.getLeaf("tab");
 }
 
-interface FileExplorerInternals {
+interface FileExplorer {
 	revealInFolder?(file: TAbstractFile): void;
-}
-
-interface AppInternals {
-	internalPlugins?: { getEnabledPluginById?(id: string): FileExplorerInternals | null };
 }
 
 /** Shows a folder in the file explorer. Uses an Obsidian internal; does nothing without it. */
 function revealFolder(app: App, folder: TFolder): void {
-	(app as App & AppInternals).internalPlugins?.getEnabledPluginById?.("file-explorer")?.revealInFolder?.(folder);
+	internalPlugin<FileExplorer>(app, "file-explorer")?.revealInFolder?.(folder);
 }
 
 /** A clickable reference chip, for sent messages (CTX-9) and output (CTX-10). */
@@ -230,7 +232,7 @@ function findLinks(text: string): { from: number; to: number; url?: string; wiki
 export function linkifyPaths(root: HTMLElement, app: App, vaultPath: string): void {
 	for (const code of Array.from(root.querySelectorAll("code"))) {
 		if (code.closest("pre, a")) continue;
-		const ref = resolve(code.textContent?.trim() ?? "", app, vaultPath);
+		const ref = resolveReference(code.textContent?.trim() ?? "", app, vaultPath);
 		if (!ref) continue;
 		code.addClass("apollo-ref");
 		code.dataset.path = ref.path;

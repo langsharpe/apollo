@@ -1,5 +1,6 @@
 import { query, type CanUseTool, type EffortLevel, type PermissionMode, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { resolveShellEnv } from "./cli";
+import type { ChatConfig } from "./chat-options";
 import { buildOptions } from "./config";
 import type ApolloPlugin from "./main";
 import type { Presenter } from "./presenter";
@@ -9,7 +10,9 @@ import { createVaultServer } from "./vault-tools";
 export interface ChatSessionHandlers {
 	message(msg: SDKMessage): void;
 	permission: CanUseTool;
-	/** The Claude Code process ended. `error` is set unless the session was closed on purpose. */
+	/**
+	 * The Claude Code process ended by itself, so `error` is always set. A deliberate close() never calls this.
+	 */
 	ended(error: unknown): void;
 	/** The process was stopped after sitting idle. The next message resumes the session. */
 	released(): void;
@@ -23,7 +26,7 @@ export interface ChatSessionHandlers {
  * starts on the first message. If it exits, or sits idle past the timeout
  * (TAB-6), the next message starts a new one that resumes the same session.
  */
-export class ChatSession {
+export class ChatSession implements ChatConfig {
 	sessionId: string | null = null;
 	/** True from send, or from the start of a turn Claude Code begins itself, until the turn's result arrives. */
 	busy = false;
@@ -35,20 +38,24 @@ export class ChatSession {
 	private abort: AbortController | null = null;
 	private idleTimer: number | null = null;
 
+	// The chat's config, documented on ChatConfig. Each change applies to the next process start as well as the running one.
+	permissionMode: PermissionMode;
+	model: string | null;
+	effort: EffortLevel | null;
+	outputStyle: string;
+
 	constructor(
 		private readonly plugin: ApolloPlugin,
-		private readonly handlers: ChatSessionHandlers,
-		/** Mode for the next process start. Kept in step with what Claude Code reports. */
-		public permissionMode: PermissionMode,
 		/** Opens notes for workspace_present, in the chat's workspace. */
 		private readonly presenter: Presenter,
-		/** Output style for every process this chat starts. Empty means Claude Code's default prompt. */
-		public outputStyle: string,
-		/** Model for the next process start. Null means Claude Code's default. */
-		public model: string | null = null,
-		/** Effort for the next process start. Null means the model's default. */
-		public effort: EffortLevel | null = null,
-	) {}
+		private readonly handlers: ChatSessionHandlers,
+		config: ChatConfig,
+	) {
+		this.permissionMode = config.permissionMode;
+		this.model = config.model;
+		this.effort = config.effort;
+		this.outputStyle = config.outputStyle;
+	}
 
 	/** Whether a Claude Code process is running for this chat. */
 	get running(): boolean {
@@ -87,8 +94,16 @@ export class ChatSession {
 	}
 
 	async setPermissionMode(mode: PermissionMode): Promise<void> {
+		// Set before awaiting: a status message confirming the switch can arrive first.
+		const previous = this.permissionMode;
 		this.permissionMode = mode;
-		await this.query?.setPermissionMode(mode);
+		try {
+			await this.query?.setPermissionMode(mode);
+		} catch (err) {
+			// Otherwise the next process would start in a mode the dropdown doesn't show.
+			this.permissionMode = previous;
+			throw err;
+		}
 	}
 
 	async setModel(model: string | null): Promise<void> {

@@ -1,8 +1,11 @@
 import { homedir } from "node:os";
 import { Menu, TFile, TFolder, prepareFuzzySearch, renderResults, setIcon, type App, type Component, type SearchResult, type TAbstractFile } from "obsidian";
 import { sourceLabel, type CatalogueEntry } from "./catalogue";
+import { truncate } from "./format";
 import { InputMenu, type ChooseHow, type MenuRow } from "./input-menu";
 import type ApolloPlugin from "./main";
+import { draggedItem } from "./obsidian-internals";
+import { isInSidebar, leafFilePath } from "./workspace";
 import { findReferences, formatReference, isAbsolutePath, vaultRelative } from "./references";
 
 export interface ChatInputHandlers {
@@ -12,21 +15,8 @@ export interface ChatInputHandlers {
 	changed(): void;
 }
 
-/** Obsidian internals the public API doesn't expose. All may be missing. */
-interface AppInternals {
-	dragManager?: {
-		draggable?: {
-			type?: string;
-			file?: TAbstractFile;
-			files?: TAbstractFile[];
-			linktext?: string;
-			sourcePath?: string;
-		} | null;
-	};
-}
-
-type SlashToken = { kind: "slash"; from: number; query: string };
-type FileToken = { kind: "file"; from: number; query: string };
+/** A `/command` or `@file` being typed: `from` is its trigger character, `to` the end of its query. */
+type Token = { kind: "slash" | "file"; from: number; to: number; query: string };
 
 const FILE_RESULTS = 50;
 const RECENT_FILES = 10;
@@ -49,11 +39,13 @@ const SLASH_GROUPS: [CatalogueEntry["kind"], string][] = [
 export class ChatInput {
 	readonly el: HTMLTextAreaElement;
 	private readonly app: App;
+	/** Holds the textarea, its backdrop and the menus; the drop target. */
+	private readonly boxEl: HTMLElement;
 	private readonly backdropEl: HTMLElement;
 	private readonly warningEl: HTMLElement;
 	private readonly slashMenu: InputMenu<CatalogueEntry>;
 	private readonly fileMenu: InputMenu<TAbstractFile>;
-	private token: SlashToken | FileToken | null = null;
+	private token: Token | null = null;
 	/** Token start where the menu was dismissed with Escape, so it stays closed while typing on. */
 	private dismissedAt: number | null = null;
 	/** Pasted or dropped paths outside the vault, flagged while they stay in the text (CTX-6). */
@@ -68,7 +60,7 @@ export class ChatInput {
 		this.app = plugin.app;
 		this.warningEl = parent.createDiv({ cls: "apollo-input-warning" });
 		this.warningEl.hide();
-		const box = parent.createDiv({ cls: "apollo-input-box" });
+		const box = (this.boxEl = parent.createDiv({ cls: "apollo-input-box" }));
 		this.backdropEl = box.createDiv({ cls: "apollo-input-backdrop", attr: { "aria-hidden": "true" } });
 		this.el = box.createEl("textarea", { attr: { placeholder: "Ask Claude…  (@ for files, / for commands, Enter to send)", rows: "1" } });
 		this.slashMenu = new InputMenu(box, (entry, how) => this.chooseCommand(entry, how), "apollo-slash-menu");
@@ -140,11 +132,9 @@ export class ChatInput {
 		const { workspace } = this.app;
 		workspace.iterateAllLeaves((leaf) => {
 			// Sidebar panels such as backlinks name a file too, but aren't open notes.
-			const root = leaf.getRoot();
-			if (root === workspace.leftSplit || root === workspace.rightSplit) return;
-			// Deferred tabs have no view yet, but their saved state names the file.
-			const path = leaf.getViewState().state?.file;
-			const file = typeof path === "string" ? this.app.vault.getFileByPath(path) : null;
+			if (isInSidebar(this.app, leaf)) return;
+			const path = leafFilePath(leaf);
+			const file = path ? this.app.vault.getFileByPath(path) : null;
 			if (file && !seen.has(file.path)) {
 				seen.add(file.path);
 				files.push(file);
@@ -209,15 +199,15 @@ export class ChatInput {
 		this.updateMenus();
 	}
 
-	private currentToken(): SlashToken | FileToken | null {
+	private currentToken(): Token | null {
 		const { selectionStart: start, selectionEnd: end, value } = this.el;
 		if (start !== end) return null;
 		const before = value.slice(0, start);
 		// SLS-1: "/" at the start or after whitespace. CTX-1: "@" likewise, or after a bracket.
 		const slash = /(?:^|\s)\/(\S*)$/.exec(before);
-		if (slash) return { kind: "slash", from: start - slash[1]!.length - 1, query: slash[1]! };
+		if (slash) return { kind: "slash", from: start - slash[1]!.length - 1, to: start, query: slash[1]! };
 		const at = /(?:^|[\s([])@([^\s"]*)$/.exec(before);
-		if (at) return { kind: "file", from: start - at[1]!.length - 1, query: at[1]! };
+		if (at) return { kind: "file", from: start - at[1]!.length - 1, to: start, query: at[1]! };
 		return null;
 	}
 
@@ -283,7 +273,7 @@ export class ChatInput {
 				if (e.argumentHint) title.createSpan({ cls: "apollo-menu-hint", text: ` ${e.argumentHint}` });
 				const note = e.unavailable ? `${e.unavailable}. ${e.description}` : e.description;
 				// Only one line shows, but laying out a 1,000-character description costs as much as showing it.
-				if (note) content.createDiv({ cls: "suggestion-note", text: note.length > NOTE_LENGTH ? `${note.slice(0, NOTE_LENGTH - 1)}…` : note });
+				if (note) content.createDiv({ cls: "suggestion-note", text: truncate(note, NOTE_LENGTH) });
 				el.createDiv({ cls: "suggestion-aux" }).createSpan({ cls: `apollo-badge is-${e.source}`, text: sourceLabel(e) });
 			},
 		};
@@ -293,12 +283,11 @@ export class ChatInput {
 	private chooseCommand(entry: CatalogueEntry, how: ChooseHow): void {
 		const token = this.token;
 		if (token?.kind !== "slash") return;
-		const end = token.from + 1 + token.query.length;
 		if (how === "tab" && token.query !== entry.name) {
-			this.replaceRange(token.from, end, `/${entry.name}`);
+			this.replaceRange(token.from, token.to, `/${entry.name}`);
 			return;
 		}
-		this.replaceRange(token.from, end, `/${entry.name} `);
+		this.replaceRange(token.from, token.to, `/${entry.name} `);
 		this.closeMenus();
 	}
 
@@ -344,14 +333,13 @@ export class ChatInput {
 	private chooseFile(file: TAbstractFile, how: ChooseHow): void {
 		const token = this.token;
 		if (token?.kind !== "file") return;
-		const end = token.from + 1 + token.query.length;
 		if (how === "tab" && file instanceof TFolder) {
-			this.replaceRange(token.from, end, `@${file.path}/`);
+			this.replaceRange(token.from, token.to, `@${file.path}/`);
 			return;
 		}
 		const ref = formatReference(file, this.plugin.settings.referenceFormat);
-		const after = this.el.value.slice(end);
-		this.replaceRange(token.from, end, /^\s/.test(after) ? ref : `${ref} `);
+		const after = this.el.value.slice(token.to);
+		this.replaceRange(token.from, token.to, /^\s/.test(after) ? ref : `${ref} `);
 		this.closeMenus();
 	}
 
@@ -366,11 +354,16 @@ export class ChatInput {
 		this.insertPaths(lines);
 	}
 
+	/** The vault file or folder at an absolute path (or one starting with ~/), or null if it's outside the vault. */
+	private vaultFileAt(absPath: string): TAbstractFile | null {
+		const rel = vaultRelative(absPath.replace(/^~(?=\/)/, homedir()), this.plugin.vaultPath());
+		return rel ? this.app.vault.getAbstractFileByPath(rel) : null;
+	}
+
 	private insertPaths(paths: string[]): void {
 		const format = this.plugin.settings.referenceFormat;
 		const parts = paths.map((p) => {
-			const rel = vaultRelative(p.replace(/^~(?=\/)/, homedir()), this.plugin.vaultPath());
-			const file = rel ? this.app.vault.getAbstractFileByPath(rel) : null;
+			const file = this.vaultFileAt(p);
 			if (file) return formatReference(file, format);
 			this.outside.add(p);
 			return p;
@@ -381,17 +374,17 @@ export class ChatInput {
 	private onDragOver(evt: DragEvent): void {
 		const dt = evt.dataTransfer;
 		if (!dt) return;
-		if (!this.draggable() && !dt.types.includes("Files") && !dt.types.includes("text/plain")) return;
+		if (!draggedItem(this.app) && !dt.types.includes("Files") && !dt.types.includes("text/plain")) return;
 		// Keep Obsidian's workspace from treating this as a drop onto the pane.
 		evt.preventDefault();
 		evt.stopPropagation();
 		dt.dropEffect = "copy";
-		this.el.parentElement?.addClass("is-drag-over");
+		this.boxEl.addClass("is-drag-over");
 	}
 
 	/** CTX-2: files and folders from the explorer, tab headers, search, links, or the OS. */
 	private onDrop(evt: DragEvent): void {
-		this.el.parentElement?.removeClass("is-drag-over");
+		this.boxEl.removeClass("is-drag-over");
 		const files = this.droppedFiles(evt);
 		if (files.vault.length || files.outside.length) {
 			evt.preventDefault();
@@ -402,13 +395,9 @@ export class ChatInput {
 		}
 	}
 
-	private draggable() {
-		return (this.app as App & AppInternals).dragManager?.draggable ?? null;
-	}
-
 	private droppedFiles(evt: DragEvent): { vault: TAbstractFile[]; outside: string[] } {
-		const { vault, metadataCache } = this.app;
-		const drag = this.draggable();
+		const { metadataCache } = this.app;
+		const drag = draggedItem(this.app);
 		if (drag) {
 			if ((drag.type === "file" || drag.type === "folder") && drag.file) return { vault: [drag.file], outside: [] };
 			if (drag.type === "files" && drag.files) return { vault: drag.files, outside: [] };
@@ -424,8 +413,7 @@ export class ChatInput {
 			const inVault: TAbstractFile[] = [];
 			const outside: string[] = [];
 			for (const p of paths) {
-				const rel = vaultRelative(p, this.plugin.vaultPath());
-				const file = rel ? vault.getAbstractFileByPath(rel) : null;
+				const file = this.vaultFileAt(p);
 				if (file) inVault.push(file);
 				else outside.push(p);
 			}

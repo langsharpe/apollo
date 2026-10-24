@@ -18,7 +18,7 @@ const RENDER_BACKOFF = 4;
  * links) come out the same as when the chat is loaded from history.
  */
 export class MarkdownStream {
-	text = "";
+	private text = "";
 	/** Where the text not yet rendered for good starts. */
 	private stable = 0;
 	/** Rendered blocks sit directly in the element, as they do once finished, so the theme's spacing applies; the unfinished tail is everything after this marker. */

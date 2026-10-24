@@ -1,8 +1,12 @@
-import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type App, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, View, WorkspaceTabs, debounce, setIcon, type Editor, type Menu, type TAbstractFile, type TFile, type WorkspaceLeaf } from "obsidian";
 import { CommandCatalogue, type CatalogueCache } from "./catalogue";
-import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, userPrompt, type ChatViewState } from "./chat-view";
+import { CHAT_VIEW_TYPE, ChatView, NEW_CHAT_TITLE, type ChatViewState } from "./chat-view";
+import { userPrompt } from "./transcript-history";
 import type { ChatSession } from "./chat-session";
+import { errorMessage } from "./format";
 import { confirmAction, promptText } from "./modals";
+import { deferredHeader, menuSectionOrder, printHotkey, refreshTabHeader, setRibbonItemIcon, usedMenuSections } from "./obsidian-internals";
+
 import { formatSelection } from "./references";
 import { SESSION_LIST_VIEW_TYPE, SessionListView } from "./session-list-view";
 import { SessionStore, type SessionMeta } from "./sessions";
@@ -63,6 +67,25 @@ export default class ApolloPlugin extends Plugin {
 		this.registerView(SESSION_LIST_VIEW_TYPE, (leaf) => new SessionListView(leaf, this));
 		this.app.workspace.onLayoutReady(() => this.repairGhostTabs());
 
+		this.registerCommands();
+		this.registerMenus();
+		this.registerEmptyTabActions();
+
+		this.ribbonEl = this.addRibbonIcon(this.settings.icon, "New Apollo chat", () => void this.openChat());
+		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
+
+		this.registerEvent(this.app.workspace.on("quit", () => this.closeAll()));
+		// The chat that last had focus is where "Add to chat" goes.
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
+				// Hotkeys can change while a tab is open; refresh the shown one when an empty tab gets focus.
+				if (leaf?.view.getViewType() === "empty") this.addEmptyTabActions();
+			}),
+		);
+	}
+
+	private registerCommands(): void {
 		// TAB-3.
 		this.addCommand({
 			id: "new-chat",
@@ -84,22 +107,12 @@ export default class ApolloPlugin extends Plugin {
 		this.addCommand({
 			id: "close-chat",
 			name: "Close chat",
-			checkCallback: (checking) => {
-				const view = this.app.workspace.getActiveViewOfType(ChatView);
-				if (!view) return false;
-				if (!checking) view.leaf.detach();
-				return true;
-			},
+			checkCallback: (checking) => this.withActiveChat(checking, (view) => view.leaf.detach()),
 		});
 		this.addCommand({
 			id: "toggle-work",
 			name: "Show or hide thinking and tool calls",
-			checkCallback: (checking) => {
-				const view = this.app.workspace.getActiveViewOfType(ChatView);
-				if (!view) return false;
-				if (!checking) view.toggleWork();
-				return true;
-			},
+			checkCallback: (checking) => this.withActiveChat(checking, (view) => view.toggleWork()),
 		});
 		this.addCommand({
 			id: "focus-next-chat",
@@ -138,6 +151,17 @@ export default class ApolloPlugin extends Plugin {
 				return true;
 			},
 		});
+	}
+
+	/** A command that runs on the active chat and is unavailable without one. */
+	private withActiveChat(checking: boolean, run: (view: ChatView) => void): boolean {
+		const view = this.app.workspace.getActiveViewOfType(ChatView);
+		if (!view) return false;
+		if (!checking) run(view);
+		return true;
+	}
+
+	private registerMenus(): void {
 		// CTX-3.
 		this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => this.addChatMenuItems(menu, [file])));
 		this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => this.addChatMenuItems(menu, files)));
@@ -154,29 +178,15 @@ export default class ApolloPlugin extends Plugin {
 				);
 			}),
 		);
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", (leaf) => {
-				if (leaf?.view instanceof ChatView) this.lastChat = leaf;
-			}),
-		);
+	}
 
+	private registerEmptyTabActions(): void {
 		// Empty tabs get a "New chat" button next to core's "New note" and "Go to file".
 		this.app.workspace.onLayoutReady(() => this.addEmptyTabActions());
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.addEmptyTabActions()));
-		// Hotkeys can change while a tab is open; refresh the shown one when an empty tab gets focus.
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", (leaf) => {
-				if (leaf?.view.getViewType() === "empty") this.addEmptyTabActions();
-			}),
-		);
 		this.register(() => {
 			for (const leaf of this.app.workspace.getLeavesOfType("empty")) leaf.view.containerEl.querySelector(".apollo-new-chat-action")?.remove();
 		});
-
-		this.ribbonEl = this.addRibbonIcon(this.settings.icon, "New Apollo chat", () => void this.openChat());
-		this.addRibbonIcon("messages-square", "Open Apollo chat list", () => void this.openChatList());
-
-		this.registerEvent(this.app.workspace.on("quit", () => this.closeAll()));
 	}
 
 	override onunload(): void {
@@ -201,7 +211,12 @@ export default class ApolloPlugin extends Plugin {
 	async openChat(state: Partial<ChatViewState> = {}, placement: ChatPlacement = this.settings.openChatsIn): Promise<WorkspaceLeaf> {
 		const existing = state.sessionId ? this.chatLeaves().find((leaf) => leafSessionId(leaf) === state.sessionId) : undefined;
 		const leaf = existing ?? this.newLeaf(placement);
-		if (!existing) await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: { ...state } });
+		return this.showChat(leaf, existing ? undefined : state);
+	}
+
+	/** Focuses `leaf`, first making it a chat with `state` when one is given. */
+	private async showChat(leaf: WorkspaceLeaf, state?: Partial<ChatViewState>): Promise<WorkspaceLeaf> {
+		if (state) await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: { ...state } });
 		await this.focusLeaf(leaf);
 		return leaf;
 	}
@@ -229,7 +244,8 @@ export default class ApolloPlugin extends Plugin {
 		const leaves = this.chatLeaves();
 		// Before any chat has had focus (e.g. after a restart), prefer one that's on screen.
 		const fallback = leaves.find((l) => !l.isDeferred) ?? leaves[0] ?? null;
-		let leaf = target === "active" ? (this.lastChat && leaves.includes(this.lastChat) ? this.lastChat : fallback) : null;
+		let leaf: WorkspaceLeaf | null = null;
+		if (target === "active") leaf = this.lastChat && leaves.includes(this.lastChat) ? this.lastChat : fallback;
 		if (leaf) await this.focusLeaf(leaf);
 		else leaf = await this.openChat();
 		await leaf.loadIfDeferred();
@@ -248,8 +264,8 @@ export default class ApolloPlugin extends Plugin {
 	private addChatMenuItems(menu: Menu, files: TAbstractFile[]): void {
 		if (!files.length) return;
 		const what = files.length > 1 ? `${files.length} items` : "";
-		const { items, sections } = menu as Menu & MenuInternals;
-		const used = new Set(items?.map((i) => i.section));
+		const sections = menuSectionOrder(menu);
+		const used = usedMenuSections(menu);
 		const section = sections ? (["action-primary", "open", "close"].find((s) => sections.includes(s) && !used.has(s)) ?? "action") : "action";
 		menu.addItem((item) =>
 			item
@@ -297,8 +313,12 @@ export default class ApolloPlugin extends Plugin {
 			const forkId = await this.store.fork(sessionId, upTo);
 			await this.openChat({ sessionId: forkId, draft });
 		} catch (err) {
-			new Notice(`Couldn't fork this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't fork this chat: ${errorMessage(err)}`);
 		}
+	}
+
+	copySessionId(sessionId: string): void {
+		void navigator.clipboard.writeText(sessionId).then(() => new Notice("Session ID copied."));
 	}
 
 	async renameChat(sessionId: string, current: string): Promise<void> {
@@ -312,7 +332,7 @@ export default class ApolloPlugin extends Plugin {
 		try {
 			await this.store.rename(sessionId, title);
 		} catch (err) {
-			new Notice(`Couldn't rename this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't rename this chat: ${errorMessage(err)}`);
 		}
 	}
 
@@ -328,7 +348,7 @@ export default class ApolloPlugin extends Plugin {
 		try {
 			await this.store.delete(sessionId);
 		} catch (err) {
-			new Notice(`Couldn't delete this chat: ${err instanceof Error ? err.message : String(err)}`);
+			new Notice(`Couldn't delete this chat: ${errorMessage(err)}`);
 		}
 	}
 
@@ -341,8 +361,7 @@ export default class ApolloPlugin extends Plugin {
 
 	/** Replaces a leaf's view, such as an empty tab's, with a new chat. */
 	private async openChatIn(leaf: WorkspaceLeaf): Promise<void> {
-		await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true, state: {} });
-		await this.focusLeaf(leaf);
+		await this.showChat(leaf, {});
 	}
 
 	/**
@@ -352,7 +371,7 @@ export default class ApolloPlugin extends Plugin {
 	 */
 	private addEmptyTabActions(): void {
 		// The hotkey that does the same from here: a chat in this tab.
-		const hotkey = (this.app as App & AppInternals).hotkeyManager?.printHotkeyForCommand?.(`${this.manifest.id}:new-chat-in-current-pane`);
+		const hotkey = printHotkey(this.app, `${this.manifest.id}:new-chat-in-current-pane`);
 		for (const leaf of this.app.workspace.getLeavesOfType("empty")) {
 			const list = leaf.view.containerEl.querySelector<HTMLElement>(".empty-state-action-list");
 			if (!list) continue;
@@ -403,7 +422,7 @@ export default class ApolloPlugin extends Plugin {
 
 	/** Chats that follow the setting pick up its new value. */
 	applyShowWork(): void {
-		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyShowWork();
+		for (const view of this.chatViews()) view.applyShowWork();
 	}
 
 	/**
@@ -415,17 +434,20 @@ export default class ApolloPlugin extends Plugin {
 		if (this.ribbonEl) {
 			setIcon(this.ribbonEl, icon);
 			// The ribbon keeps its own copy for its menu and redraws; update it too.
-			const ribbon = this.app.workspace.leftRibbon as unknown as RibbonInternals;
-			const item = ribbon.items?.find((i) => i.buttonEl === this.ribbonEl);
-			if (item) item.icon = icon;
+			setRibbonItemIcon(this.app, this.ribbonEl, icon);
 		}
 		this.addEmptyTabActions();
-		for (const leaf of this.chatLeaves()) if (leaf.view instanceof ChatView) leaf.view.applyIcon();
+		for (const view of this.chatViews()) view.applyIcon();
 		this.repairGhostTabs();
 	}
 
 	private chatLeaves(): WorkspaceLeaf[] {
 		return this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+	}
+
+	/** The chats Obsidian has loaded; deferred tabs have no view yet. */
+	private chatViews(): ChatView[] {
+		return this.chatLeaves().flatMap((leaf) => (leaf.view instanceof ChatView ? [leaf.view] : []));
 	}
 
 	/**
@@ -441,13 +463,13 @@ export default class ApolloPlugin extends Plugin {
 		let repaired = false;
 		for (const leaf of this.chatLeaves()) {
 			if (!leaf.isDeferred) continue;
-			const view = leaf.view as View & DeferredViewInternals;
+			const view = deferredHeader(leaf.view);
 			const saved = leaf.getViewState().state?.title;
 			const title = typeof saved === "string" && saved ? saved : NEW_CHAT_TITLE;
 			if (view.icon === undefined || (view.icon === this.settings.icon && view.title === title)) continue;
 			view.icon = this.settings.icon;
 			view.title = title;
-			(leaf as WorkspaceLeaf & LeafInternals).updateHeader?.();
+			refreshTabHeader(leaf);
 			repaired = true;
 		}
 		if (repaired) this.app.workspace.requestSaveLayout();
@@ -476,35 +498,6 @@ export default class ApolloPlugin extends Plugin {
 	private closeAll(): void {
 		for (const session of [...this.sessions]) session.close();
 	}
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface MenuInternals {
-	items?: { section?: string }[];
-	/** Section order, from `addSections`. */
-	sections?: string[];
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface AppInternals {
-	hotkeyManager?: { printHotkeyForCommand?(id: string): string };
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface RibbonInternals {
-	items?: { icon: string; buttonEl?: HTMLElement }[];
-}
-
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface LeafInternals {
-	/** Refreshes the tab's icon and title from the view. */
-	updateHeader?(): void;
-}
-
-/** A deferred tab's stand-in view, which shows the icon and title saved with the layout. */
-interface DeferredViewInternals {
-	icon?: string;
-	title?: string;
 }
 
 /** The session a chat leaf shows. Works for deferred tabs, whose saved state stands in for the view. */

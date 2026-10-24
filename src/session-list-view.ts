@@ -1,5 +1,6 @@
 import type { SDKSessionInfo } from "@anthropic-ai/claude-agent-sdk";
-import { ExtraButtonComponent, ItemView, Menu, Notice, SearchComponent, debounce, prepareSimpleSearch, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
+import { ExtraButtonComponent, ItemView, Menu, SearchComponent, debounce, prepareSimpleSearch, setIcon, setTooltip, type WorkspaceLeaf } from "obsidian";
+import { errorMessage } from "./format";
 import type ApolloPlugin from "./main";
 import { sessionTitle } from "./sessions";
 
@@ -65,7 +66,7 @@ export class SessionListView extends ItemView {
 			this.sessions = await this.plugin.store.list();
 			this.error = null;
 		} catch (err) {
-			this.error = err instanceof Error ? err.message : String(err);
+			this.error = errorMessage(err);
 		}
 		this.loaded = true;
 		this.render();
@@ -167,7 +168,7 @@ export class SessionListView extends ItemView {
 			item
 				.setTitle("Copy session ID")
 				.setIcon("copy")
-				.onClick(() => void navigator.clipboard.writeText(id).then(() => new Notice("Session ID copied."))),
+				.onClick(() => plugin.copySessionId(id)),
 		);
 		menu.addSeparator();
 		menu.addItem((item) => item.setTitle("Delete…").setIcon("trash-2").setWarning(true).onClick(() => void plugin.deleteChat(id, title)));

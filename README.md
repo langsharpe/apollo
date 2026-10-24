@@ -27,19 +27,53 @@ obsidian vault=ApolloTest dev:errors
 
 ## Usage
 
+### Chats and tabs
+
 Run **Apollo: New chat** (or click the Apollo ribbon icon, or **New chat** in an empty tab) to open a chat. **Open new chats in** (settings) picks a new tab, a split right or down, or the right sidebar. **Icon** (settings) picks Apollo's icon for the ribbon, chat tabs and menus: a chat bot (the default), a speech bubble, a sun, an orbit or sparkles. **Apollo: New chat in current pane** (`Mod+Alt+N`, or `/new` in the input) starts a fresh session in the focused chat, or opens a chat in the focused empty tab. Other commands: *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*, *Open chat list*. Apollo finds `claude` through your login shell; to override, set **Claude CLI path** in settings.
 
 Each chat keeps one Claude Code process running between turns, and stops it after the **Idle process timeout** (10 minutes by default). The next message resumes the session. Open chats, their drafts and scroll positions come back when Obsidian restarts. With **Readable line length** (Settings → Editor) on, a chat in a wide pane keeps its transcript and input to your theme's line width, like a note.
 
-Pick the model (Opus, Sonnet, Fable, Haiku, each shown with its current version, e.g. Opus 5.5), the effort (Default, Low, Medium, High, Extra high, Max, as the model supports; hidden for Haiku) and the permission mode (Ask, Accept edits, Plan, Auto) in the chat toolbar; the defaults for new chats are settings, with Opus as the default model and each model's own effort as the default effort. `/model` still offers pinned and older versions, and `/effort` sets the effort from the input. **Output style** (settings) picks an output style for new chats, built-in or your own from `.claude/output-styles`. None keeps Claude Code's default prompt, as in the CLI. Each chat keeps the style it started with, and the info icon's tooltip shows it. Custom and appended system prompts aren't offered. Claude's thinking and tool calls between messages collapse into one row that summarises what it did ("Thought, read 3 files, ran 1 command"), with the files read or edited listed as links underneath. Click it to see the steps: each *Thought* row opens to the thinking summary, and each run of consecutive tool calls opens to its individual calls, where a failed call has a red dot. These rows are hidden unless **Show thinking and tool calls** (settings) is on; to switch one chat, hover a message and click the brain icon or double-click the status row while Claude works, which also open each row one level to its steps, or use the tab's ⋯ menu or run *Show or hide thinking and tool calls*. While Claude works, a status row at the end of the transcript says what it's doing now ("Reading notes/a.md", "Running npm test for 1m 10s") and how long the turn has run. It turns amber and its spinner stops if Claude Code goes quiet for longer than the step should take, and orange when Claude is waiting for your answer. Subagents get a row each, with their latest step, tool count and time; a chat stays working until its background agents finish, and Claude's reply when they report back shows like any other turn. A chat that finishes while you're looking elsewhere keeps a dot on its tab until you look. Tool calls that need approval show an inline card. When Claude asks questions, the card shows one at a time with the caret in the answer box, so you can type and press Enter to move on; Enter on the last one submits. Clicking an option works too. Stop (or `Esc`) interrupts the turn and any agents still running, and messages sent during a turn queue until it ends. A message you send scrolls to the top of the chat, so Claude's reply reads from its start; the chat only follows the reply once you scroll to its end.
+### Model, effort and mode
+
+Pick the model (Opus, Sonnet, Fable, Haiku, each shown with its current version, e.g. Opus 5.5), the effort (Default, Low, Medium, High, Extra high, Max, as the model supports; hidden for Haiku) and the permission mode (Ask, Accept edits, Plan, Auto) in the chat toolbar; the defaults for new chats are settings, with Opus as the default model and each model's own effort as the default effort. `/model` still offers pinned and older versions, and `/effort` sets the effort from the input. **Output style** (settings) picks an output style for new chats, built-in or your own from `.claude/output-styles`. None keeps Claude Code's default prompt, as in the CLI. Each chat keeps the style it started with, and the info icon's tooltip shows it. Custom and appended system prompts aren't offered.
+
+### Thinking and tool calls
+
+Claude's thinking and tool calls between messages collapse into one row that summarises what it did ("Thought, read 3 files, ran 1 command"), with the files read or edited listed as links underneath. Click it to see the steps: each *Thought* row opens to the thinking summary, and each run of consecutive tool calls opens to its individual calls, where a failed call has a red dot. These rows are hidden unless **Show thinking and tool calls** (settings) is on; to switch one chat, hover a message and click the brain icon or double-click the status row while Claude works, which also open each row one level to its steps, or use the tab's ⋯ menu or run *Show or hide thinking and tool calls*.
+
+### The status row
+
+While Claude works, a status row at the end of the transcript says what it's doing now ("Reading notes/a.md", "Running npm test for 1m 10s") and how long the turn has run. It turns amber and its spinner stops if Claude Code goes quiet for longer than the step should take, and orange when Claude is waiting for your answer. Subagents get a row each, with their latest step, tool count and time; a chat stays working until its background agents finish, and Claude's reply when they report back shows like any other turn. A chat that finishes while you're looking elsewhere keeps a dot on its tab until you look.
+
+### Approvals and questions
+
+Tool calls that need approval show an inline card. When Claude asks questions, the card shows one at a time with the caret in the answer box, so you can type and press Enter to move on; Enter on the last one submits. Clicking an option works too.
+
+### Stop and queued messages
+
+Stop (or `Esc`) interrupts the turn and any agents still running, and messages sent during a turn queue until it ends.
+
+### Scrolling
+
+A message you send scrolls to the top of the chat, so Claude's reply reads from its start; the chat only follows the reply once you scroll to its end.
+
+### Chat list and forking
 
 **Claude chats** (the messages ribbon icon, or *Open chat list*) lists every Claude Code session for the vault, including ones started in the terminal. Click to open or resume; right-click to fork, rename, pin or delete. In an open chat, double-click the title above the transcript to rename it. Sessions are Claude Code's own transcripts, so `claude --resume` in the vault sees the same list. Hover a message and click the branch icon to fork from there. Forking from one of your messages puts it back in the input to edit and resend.
 
+### Context and references
+
 Type `@` in the input to pick a file or folder, or drag one in from the file explorer, a tab or Finder. You can also right-click it and choose *Add to chat*, run *Add current note to chat* (`Mod+Shift+L`), or select text and run *Add selection to chat*. The toolbar's files button lists open notes. Pasting an absolute path inside the vault turns it into a vault-relative reference. References go in as plain paths by default; set **Reference format** to *@-mention* to attach file contents instead. Paths in Claude's replies and tool calls are clickable. In your sent messages, references, URLs and `[[wikilinks]]` are links too.
+
+### Slash commands
 
 Type `/` to open the slash menu: Apollo's own commands (`/new`, `/clear`, `/fork`, `/model`, `/effort`, `/mode`), skills, custom commands, MCP prompts and Claude Code's built-ins. It's served from a catalogue Apollo builds by scanning `.claude/skills`, `.claude/commands`, `~/.claude` and enabled plugins, then reconciles with what Claude Code reports when a chat starts.
 
+### Obsidian tools
+
 Claude also gets **Obsidian tools** that work through Obsidian's own API, inside the plugin: `vault_links` (links, backlinks and unresolved links), `vault_outline`, `vault_frontmatter` and `vault_tags` (property edits written by Obsidian), `vault_query` (find notes by tags, folder, properties and links), `vault_move` (renames that update links), `vault_trash` (follows your Deleted files setting), `workspace_context` (active note, open tabs, selection) and `workspace_present`, which opens a note beside the chat without taking focus. Repeated presents reuse one pane, marked with Apollo's icon on its tab; pin it to keep it. Bridges to Dataview, Templater or core Templates, Daily notes and Bases appear when those are enabled. Read-only tools run without asking; the rest follow the permission mode. Moves, trashes and property edits show a before/after summary in the chat. Settings → Obsidian tools turns them off, individually or all at once, and sets where presented notes open, how many per turn, and whether notes Claude creates open automatically.
+
+### Bundling
 
 The Agent SDK is bundled into `main.js`. It expects Node globals that differ in Obsidian's renderer, so `esbuild.config.mjs` shims them. See [docs/m0-findings.md](docs/m0-findings.md), [docs/m1-findings.md](docs/m1-findings.md), [docs/m2-findings.md](docs/m2-findings.md), [docs/m3-findings.md](docs/m3-findings.md) and [docs/m5-obsidian-tools.md](docs/m5-obsidian-tools.md) and [docs/progress.md](docs/progress.md).
 

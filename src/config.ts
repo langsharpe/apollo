@@ -1,17 +1,11 @@
-import type { CanUseTool, EffortLevel, Options, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, Options } from "@anthropic-ai/claude-agent-sdk";
+import type { ChatConfig } from "./chat-options";
 import type { ApolloSettings } from "./settings";
 import type { ShellEnv } from "./cli";
 import { VAULT_SERVER, type VaultServer } from "./vault-tools";
 
-export interface ChatState {
+export interface ChatState extends ChatConfig {
 	sessionId: string | null;
-	permissionMode: PermissionMode;
-	/** Model alias or ID. Null means Claude Code's default. */
-	model: string | null;
-	/** Effort level. Null means the model's default. */
-	effort: EffortLevel | null;
-	/** Output style layered on the claude_code preset. Empty leaves the prompt as the CLI's. */
-	outputStyle: string;
 	abort: AbortController;
 	onPermissionRequest: CanUseTool;
 	/** Called before each Write runs, while the file is still in its old state (OBS-19). */
@@ -21,10 +15,10 @@ export interface ChatState {
 }
 
 /**
- * Builds SDK options from plugin settings (spec §6). M1 covers the basics:
- * vault cwd, CLI path, login-shell PATH, settings sources and the chat's
- * permission mode. Obsidian tools come from M5. The prompt is always the
- * claude_code preset, optionally with an output style (M4, §4.4); custom and
+ * Maps plugin settings and a chat's state to SDK options (spec §6): vault
+ * cwd, CLI path, login-shell PATH, settings sources, the chat's permission
+ * mode, model and effort, and the Obsidian tools. The prompt is always the
+ * claude_code preset, optionally with an output style (§4.4); custom and
  * appended prompts aren't offered.
  */
 export function buildOptions(s: ApolloSettings, env: ShellEnv, vaultPath: string, chat: ChatState): Options {

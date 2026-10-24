@@ -1,12 +1,13 @@
 import { TFile, WorkspaceTabs, resolveSubpath, type WorkspaceSplit, setIcon, setTooltip, type App, type EventRef, type WorkspaceLeaf } from "obsidian";
-import type { ApolloSettings } from "./settings";
-import type { PresentRequest } from "./vault-tools";
+import { plural } from "./format";
+import { isInSidebar, leafFilePath } from "./workspace";
+import { indexInTabGroup, leafActiveTime, tabHeaderEl } from "./obsidian-internals";
+import type { ApolloSettings, PresentPlacement } from "./settings";
 
-/** Obsidian internals the public API doesn't expose. May be missing. */
-interface LeafInternals {
-	tabHeaderEl?: HTMLElement;
-	/** When the leaf was last active, in ms. */
-	activeTime?: number;
+export interface PresentRequest {
+	heading?: string;
+	line?: number;
+	placement?: PresentPlacement;
 }
 
 /**
@@ -40,7 +41,7 @@ export class Presenter {
 	/** The note in the presentation pane, if the pane is still open. */
 	presentationPath(): string | null {
 		const pane = this.livePane();
-		return pane ? (this.fileOf(pane) ?? null) : null;
+		return pane ? (leafFilePath(pane) ?? null) : null;
 	}
 
 	/**
@@ -49,11 +50,11 @@ export class Presenter {
 	 */
 	async present(path: string, req: PresentRequest = {}): Promise<string> {
 		const file = this.app.vault.getFileByPath(path);
-		if (!(file instanceof TFile)) throw new Error(`No file at ${path} in the vault.`);
+		if (!file) throw new Error(`No file at ${path} in the vault.`);
 		this.seq++;
 		const max = this.settings().presentMaxPerTurn;
 		if (this.count >= max) {
-			return `Not opened: already showed ${max} ${max === 1 ? "note" : "notes"} this turn, the limit set in Apollo. List ${file.path} and any other notes as links in your reply instead.`;
+			return `Not opened: already showed ${plural(max, "note")} this turn, the limit set in Apollo. List ${file.path} and any other notes as links in your reply instead.`;
 		}
 		this.count++;
 
@@ -66,49 +67,57 @@ export class Presenter {
 		const prevLeaf = workspace.activeLeaf;
 		const prevEl = activeDocument.activeElement;
 
-		let leaf: WorkspaceLeaf;
-		let how: string;
-		const existing = this.findOpen(file);
+		const { leaf, how, existing } = this.chooseLeaf(file, placement);
 		if (existing) {
-			// (1) Never open a note twice.
-			leaf = existing;
 			await leaf.loadIfDeferred();
 			if (eState) leaf.setEphemeralState(eState);
-			how = "It was already open, so its tab was brought to the front";
 		} else {
-			const reuse = placement !== "tab" ? this.livePane() : null;
-			if (reuse) {
-				// (2) This chat's presentation pane, replacing its note.
-				leaf = reuse;
-				how = "Opened in the pane beside the chat, replacing the note shown there";
-			} else {
-				const near = placement !== "beside" ? this.recentNoteLeaf() : null;
-				if (near) {
-					// (3) A new tab beside the user's most recent note.
-					leaf = this.tabAfter(near);
-					how = "Opened in a new tab next to the user's notes";
-				} else if (placement === "tab" && !this.inSidebar()) {
-					leaf = this.tabAfter(this.chatLeaf);
-					how = "Opened in a new tab next to the chat";
-				} else {
-					// (4) Split the chat, or for a sidebar chat, a tab in the main area.
-					leaf = this.splitLeaf();
-					how = "Opened beside the chat";
-				}
-				if (placement !== "tab") this.setPane(leaf);
-			}
 			await leaf.openFile(file, { active: focus, ...(eState ? { eState } : {}) });
 		}
 		await workspace.revealLeaf(leaf);
-		if (focus) {
-			workspace.setActiveLeaf(leaf, { focus: true });
-		} else {
-			if (prevLeaf && workspace.activeLeaf !== prevLeaf) workspace.setActiveLeaf(prevLeaf, { focus: false });
-			if (prevEl instanceof HTMLElement && prevEl.isConnected && activeDocument.activeElement !== prevEl) prevEl.focus();
-		}
+		if (focus) workspace.setActiveLeaf(leaf, { focus: true });
+		else this.restoreFocus(prevLeaf, prevEl);
 		const where = line === undefined ? "" : req.heading && !missing ? ` at ${req.heading}` : ` at line ${line + 1}`;
 		const note = missing ? ` No heading or block "${req.heading}" was found, so it opened at the top.` : "";
 		return `${how}: ${file.path}${where}.${note}`;
+	}
+
+	/**
+	 * Picks where `file` opens (OBS-15): a leaf already showing it, this chat's
+	 * presentation pane, a tab beside the user's notes, or a split of the chat.
+	 * Makes any new leaf and marks it as the pane, but doesn't open the file.
+	 */
+	private chooseLeaf(file: TFile, placement: PresentPlacement): { leaf: WorkspaceLeaf; how: string; existing: boolean } {
+		// (1) Never open a note twice.
+		const open = this.findOpen(file);
+		if (open) return { leaf: open, how: "It was already open, so its tab was brought to the front", existing: true };
+		// (2) This chat's presentation pane, replacing its note.
+		const reuse = placement !== "tab" ? this.livePane() : null;
+		if (reuse) return { leaf: reuse, how: "Opened in the pane beside the chat, replacing the note shown there", existing: false };
+		let leaf: WorkspaceLeaf;
+		let how: string;
+		const near = placement !== "beside" ? this.recentNoteLeaf() : null;
+		if (near) {
+			// (3) A new tab beside the user's most recent note.
+			leaf = this.tabAfter(near);
+			how = "Opened in a new tab next to the user's notes";
+		} else if (placement === "tab" && !this.inSidebar()) {
+			leaf = this.tabAfter(this.chatLeaf);
+			how = "Opened in a new tab next to the chat";
+		} else {
+			// (4) Split the chat, or for a sidebar chat, a tab in the main area.
+			leaf = this.splitLeaf();
+			how = "Opened beside the chat";
+		}
+		if (placement !== "tab") this.setPane(leaf);
+		return { leaf, how, existing: false };
+	}
+
+	/** Gives focus back to where it was before presenting made a leaf active (OBS-16). */
+	private restoreFocus(prevLeaf: WorkspaceLeaf | null, prevEl: Element | null): void {
+		const { workspace } = this.app;
+		if (prevLeaf && workspace.activeLeaf !== prevLeaf) workspace.setActiveLeaf(prevLeaf, { focus: false });
+		if (prevEl instanceof HTMLElement && prevEl.isConnected && activeDocument.activeElement !== prevEl) prevEl.focus();
 	}
 
 	/**
@@ -144,17 +153,10 @@ export class Presenter {
 	private findOpen(file: TFile): WorkspaceLeaf | null {
 		const matches: WorkspaceLeaf[] = [];
 		this.app.workspace.iterateAllLeaves((leaf) => {
-			if (this.fileOf(leaf) === file.path) matches.push(leaf);
+			if (leafFilePath(leaf) === file.path) matches.push(leaf);
 		});
 		// A tab in the chat's own tab group would replace the chat on screen; show a copy beside it instead.
 		return matches.find((leaf) => leaf.parent !== this.chatLeaf.parent || this.inSidebar()) ?? null;
-	}
-
-	private fileOf(leaf: WorkspaceLeaf): string | undefined {
-		const view = leaf.view as { file?: TFile | null };
-		if (view.file instanceof TFile) return view.file.path;
-		const state = leaf.getViewState().state?.file;
-		return typeof state === "string" ? state : undefined;
 	}
 
 	/** The presentation pane, unless it has been closed, pinned or dragged next to the chat. */
@@ -182,7 +184,7 @@ export class Presenter {
 			if (leaf.getViewState().type !== "markdown" || leaf.getViewState().pinned) return;
 			if (!(leaf.parent instanceof WorkspaceTabs)) return;
 			if (!this.inSidebar() && leaf.parent === this.chatLeaf.parent) return;
-			const time = (leaf as WorkspaceLeaf & LeafInternals).activeTime ?? 0;
+			const time = leafActiveTime(leaf);
 			if (time > bestTime) {
 				best = leaf;
 				bestTime = time;
@@ -192,8 +194,7 @@ export class Presenter {
 	}
 
 	private inSidebar(): boolean {
-		const root = this.chatLeaf.getRoot();
-		return root === this.app.workspace.leftSplit || root === this.app.workspace.rightSplit;
+		return isInSidebar(this.app, this.chatLeaf);
 	}
 
 	private splitLeaf(): WorkspaceLeaf {
@@ -205,9 +206,9 @@ export class Presenter {
 
 	/** A new tab right after `leaf`, in its tab group. */
 	private tabAfter(leaf: WorkspaceLeaf): WorkspaceLeaf {
-		// The public signature asks for a split, but a tab group works, and `children` is internal.
-		const group = leaf.parent as unknown as WorkspaceSplit & { children?: unknown[] };
-		const index = group.children?.indexOf(leaf) ?? -1;
+		// The public signature asks for a split, but a tab group works.
+		const group = leaf.parent as unknown as WorkspaceSplit;
+		const index = indexInTabGroup(group, leaf);
 		return this.app.workspace.createLeafInParent(group, index === -1 ? 0 : index + 1);
 	}
 
@@ -223,12 +224,12 @@ export class Presenter {
 		this.pinnedRef = null;
 		this.marker?.remove();
 		this.marker = null;
-		if (this.pane) tabHeader(this.pane)?.removeClass("apollo-presentation");
+		if (this.pane) tabHeaderEl(this.pane)?.removeClass("apollo-presentation");
 		this.pane = leaf;
 		if (!leaf) return;
 		// Pinning takes the pane out of reuse.
 		this.pinnedRef = leaf.on("pinned-change", (pinned) => pinned && this.setPane(null));
-		const header = tabHeader(leaf);
+		const header = tabHeaderEl(leaf);
 		if (!header) return;
 		header.addClass("apollo-presentation");
 		this.marker = createSpan({ cls: "apollo-presentation-marker" });
@@ -238,8 +239,4 @@ export class Presenter {
 		if (title) title.after(this.marker);
 		else header.appendChild(this.marker);
 	}
-}
-
-function tabHeader(leaf: WorkspaceLeaf): HTMLElement | undefined {
-	return (leaf as WorkspaceLeaf & LeafInternals).tabHeaderEl;
 }

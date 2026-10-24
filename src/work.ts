@@ -1,20 +1,20 @@
 import type { App } from "obsidian";
-import { ActivityGroup, addChange, callsCount, createToggleHeader, FileLinks, setOpen, summarise, type Step } from "./activity";
+import { ActivityGroup, SummaryHeader } from "./activity";
+import { setOpen } from "./collapsible";
+import type { Step } from "./tool-calls";
 import { ThinkingBlock } from "./thinking";
 
 /**
  * A run of thinking and tool calls between messages, collapsed to one row
  * (RND-7). The header summarises what it did so far; what is happening now
  * shows in the status row at the end of the transcript (RND-8). The files
- * read and edited and any structural changes stay visible below it as links. Expanding it shows the thinking rows and activity
- * groups, which expand in turn. A run of one row shows just that row.
+ * read and edited and any structural changes stay visible below it as links.
+ * Expanding it shows the thinking rows and activity groups, which expand in
+ * turn. A run of one row shows just that row.
  */
 export class WorkSection {
 	readonly el: HTMLElement;
-	private readonly labelEl: HTMLElement;
-	private readonly countEl: HTMLElement;
-	private readonly files: FileLinks;
-	private readonly changesEl: HTMLElement;
+	private readonly summary: SummaryHeader;
 	private readonly bodyEl: HTMLElement;
 	private readonly groups: ActivityGroup[] = [];
 	private readonly thoughts: ThinkingBlock[] = [];
@@ -26,11 +26,7 @@ export class WorkSection {
 		private readonly render: (text: string, el: HTMLElement) => Promise<void>,
 	) {
 		this.el = parent.createDiv({ cls: "apollo-msg apollo-activity apollo-work" });
-		const header = createToggleHeader(this.el);
-		this.labelEl = header.createSpan({ cls: "apollo-activity-label" });
-		this.countEl = header.createSpan({ cls: "apollo-activity-count" });
-		this.files = new FileLinks(this.el.createDiv({ cls: "apollo-activity-files" }), app, vaultPath);
-		this.changesEl = this.el.createDiv({ cls: "apollo-activity-changes" });
+		this.summary = new SummaryHeader(this.el, app, vaultPath);
 		this.bodyEl = this.el.createDiv({ cls: "apollo-work-body" });
 	}
 
@@ -67,11 +63,11 @@ export class WorkSection {
 	}
 
 	addFile(path: string, edited: boolean): void {
-		this.files.add(path, edited);
+		this.summary.addFile(path, edited);
 	}
 
 	addChange(text: string): void {
-		addChange(this.changesEl, text, this.app, this.vaultPath);
+		this.summary.addChange(text);
 	}
 
 	/** Expands or collapses the section, leaving the rows inside as they are. */
@@ -88,7 +84,6 @@ export class WorkSection {
 		}
 		const calls = this.groups.flatMap((g) => g.calls);
 		const thoughts = this.thoughts.filter((t) => t.el.parentElement === this.bodyEl);
-		this.labelEl.setText(summarise(calls, thoughts.length > 0));
-		this.countEl.setText(callsCount(calls));
+		this.summary.setCalls(calls, thoughts.length > 0);
 	}
 }

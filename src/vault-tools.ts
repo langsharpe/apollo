@@ -1,6 +1,5 @@
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
 import {
-	FileView,
 	MarkdownView,
 	TFile,
 	TFolder,
@@ -13,19 +12,15 @@ import {
 	type TAbstractFile,
 } from "obsidian";
 import { z } from "zod";
-import { vaultRelative } from "./references";
+import { errorMessage, plural } from "./format";
+import { leafFilePath } from "./workspace";
+import { cliHandler, communityPlugin, internalPlugin, vaultConfig } from "./obsidian-internals";
+import type { PresentRequest } from "./presenter";
+import { quotePath, vaultRelative } from "./references";
 
 /** The MCP server's name. Its tools reach Claude Code as `mcp__apollo__<tool>`. */
 export const VAULT_SERVER = "apollo";
 export const VAULT_TOOL_PREFIX = `mcp__${VAULT_SERVER}__`;
-
-export type PresentPlacementHint = "auto" | "beside" | "tab";
-
-export interface PresentRequest {
-	heading?: string;
-	line?: number;
-	placement?: PresentPlacementHint;
-}
 
 /** What the tools need from the chat that runs them. */
 export interface ToolHost {
@@ -53,8 +48,7 @@ export interface ToolInfo {
 	available?(app: App): boolean;
 }
 
-/** Every Obsidian tool, in the order settings lists them. */
-export const OBSIDIAN_TOOLS: readonly ToolInfo[] = [
+const TOOL_INFO = [
 	{ name: "vault_links", summary: "Outgoing links, backlinks and unresolved links of a note, as Obsidian resolves them.", readOnly: true, alwaysLoad: true },
 	{ name: "vault_outline", summary: "Headings, block IDs, tags, embeds and frontmatter of a note, without its body.", readOnly: true },
 	{ name: "vault_frontmatter", summary: "Read, set or remove frontmatter properties, written by Obsidian so the YAML stays valid.", readOnly: false, alwaysLoad: true },
@@ -74,7 +68,13 @@ export const OBSIDIAN_TOOLS: readonly ToolInfo[] = [
 	},
 	{ name: "daily_note", summary: "The path of today's (or another day's) daily note.", readOnly: true, requires: "core Daily notes", available: (app) => !!dailyNotes(app) },
 	{ name: "bases_query", summary: "List bases, or the rows of a base view.", readOnly: true, requires: "core Bases", available: (app) => !!basesQuery(app) },
-];
+] as const satisfies readonly ToolInfo[];
+
+/** Every Obsidian tool name, derived from the registry so the tables keyed by it stay in step. */
+export type ToolName = (typeof TOOL_INFO)[number]["name"];
+
+/** Every Obsidian tool, in the order settings lists them. */
+export const OBSIDIAN_TOOLS: readonly (ToolInfo & { name: ToolName })[] = TOOL_INFO;
 
 /**
  * Shown to the model with the tools (OBS-11). Stands in for the Apollo
@@ -88,7 +88,7 @@ const INSTRUCTIONS = [
 	"Use workspace_present to show the user a note you want them to look at.",
 ].join(" ");
 
-/** Bridge plugins are checked once per session, so results can be cached per server. */
+/** A chat's MCP server and the full names of its read-only tools. */
 export interface VaultServer {
 	server: McpSdkServerConfigWithInstance;
 	/** Full names of the read-only tools on it, for `allowedTools`. */
@@ -99,27 +99,12 @@ export interface VaultServer {
 export function createVaultServer(host: ToolHost): VaultServer {
 	const infos = OBSIDIAN_TOOLS.filter((t) => !host.disabled.includes(t.name) && (t.available?.(host.app) ?? true));
 	const defs = toolDefinitions(host);
-	const tools = infos.map((t) => defs[t.name as ToolName]);
+	const tools = infos.map((t) => defs[t.name]);
 	return {
 		server: createSdkMcpServer({ name: VAULT_SERVER, version: "1.0.0", instructions: INSTRUCTIONS, tools }),
 		readOnlyTools: infos.filter((t) => t.readOnly).map((t) => VAULT_TOOL_PREFIX + t.name),
 	};
 }
-
-type ToolName =
-	| "vault_links"
-	| "vault_outline"
-	| "vault_frontmatter"
-	| "vault_tags"
-	| "vault_query"
-	| "vault_move"
-	| "vault_trash"
-	| "workspace_context"
-	| "workspace_present"
-	| "dataview_query"
-	| "template_create"
-	| "daily_note"
-	| "bases_query";
 
 /** A failure to report to the agent as a tool error. */
 class ToolError extends Error {}
@@ -138,7 +123,7 @@ function handle<A>(fn: (args: A) => Promise<Result>): (args: A) => Promise<Resul
 		try {
 			return await fn(args);
 		} catch (err) {
-			return { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true };
+			return { content: [{ type: "text", text: errorMessage(err) }], isError: true };
 		}
 	};
 }
@@ -245,7 +230,7 @@ function toolDefinitions(host: ToolHost) {
 					}
 					return changes.length > 0;
 				});
-				return text(changes.length ? `Frontmatter of ${q(file.path)}:\n${changes.join("\n")}` : `No changes: the frontmatter of ${q(file.path)} already matches.`);
+				return text(changes.length ? `Frontmatter of ${quotePath(file.path)}:\n${changes.join("\n")}` : `No changes: the frontmatter of ${quotePath(file.path)} already matches.`);
 			}),
 			{ ...rw("Edit frontmatter"), alwaysLoad: alwaysLoad("vault_frontmatter") },
 		),
@@ -281,7 +266,7 @@ function toolDefinitions(host: ToolHost) {
 					else delete fm.tags;
 					return true;
 				});
-				const lines = [same(before, after) ? `No changes: tags of ${q(file.path)} are ${show(before)}.` : `Tags of ${q(file.path)}: ${show(before)} → ${show(after)}`];
+				const lines = [same(before, after) ? `No changes: tags of ${quotePath(file.path)} are ${show(before)}.` : `Tags of ${quotePath(file.path)}: ${show(before)} → ${show(after)}`];
 				const inline = (app.metadataCache.getFileCache(file)?.tags ?? []).map((t) => t.tag.slice(1)).filter((t) => toRemove.includes(t.toLowerCase()));
 				if (inline.length) lines.push(`Still tagged inline in the body: ${[...new Set(inline)].map((t) => `#${t}`).join(", ")}. Edit the body to remove those.`);
 				if (invalid.length) lines.push(`Ignored, not valid tags: ${invalid.join(", ")}.`);
@@ -378,7 +363,7 @@ function toolDefinitions(host: ToolHost) {
 				await files.ensureFolder(parentOf(dest));
 				await app.fileManager.renameFile(item, dest);
 				const links = linking.size ? `Updated links in ${plural(linking.size, "note")}.` : "No other notes linked to it.";
-				return text(`Moved ${q(old)} → ${q(dest)}. ${links}`);
+				return text(`Moved ${quotePath(old)} → ${quotePath(dest)}. ${links}`);
 			}),
 			{ ...rw("Move or rename"), alwaysLoad: alwaysLoad("vault_move") },
 		),
@@ -392,8 +377,8 @@ function toolDefinitions(host: ToolHost) {
 				const linking = files.linkingNotes(item);
 				const count = item instanceof TFolder ? countFiles(item) : 0;
 				await app.fileManager.trashFile(item);
-				const where = TRASH_TEXT[getConfig(app, "trashOption") as string] ?? "moved to the trash, per the Deleted files setting";
-				const what = item instanceof TFolder ? `${q(item.path)} (${plural(count, "file")})` : q(item.path);
+				const where = TRASH_TEXT[vaultConfig(app, "trashOption") as string] ?? "moved to the trash, per the Deleted files setting";
+				const what = item instanceof TFolder ? `${quotePath(item.path)} (${plural(count, "file")})` : quotePath(item.path);
 				const links = linking.size ? ` ${plural(linking.size, "note")} linked to it; those links are now unresolved.` : "";
 				return text(`Trashed ${what}: ${where}.${links}`);
 			}),
@@ -412,7 +397,7 @@ function toolDefinitions(host: ToolHost) {
 				const seen = new Set<string>();
 				workspace.iterateRootLeaves((leaf) => {
 					const state = leaf.getViewState();
-					const path = leaf.view instanceof FileView ? leaf.view.file?.path : typeof state.state?.file === "string" ? state.state.file : undefined;
+					const path = leafFilePath(leaf);
 					if (!path || seen.has(path)) return;
 					seen.add(path);
 					tabs.push({ path, ...(path === active?.path ? { active: true as const } : {}), ...(state.pinned ? { pinned: true as const } : {}), ...(path === presentation ? { presentation: true as const } : {}) });
@@ -486,12 +471,12 @@ function toolDefinitions(host: ToolHost) {
 				if (tp) {
 					const created = await tp.templater.create_new_note_from_template(tpl, app.vault.getFolderByPath(parent || "/") ?? undefined, name, false);
 					if (!created) throw new ToolError("Templater didn't create the note. Check Obsidian for a Templater error.");
-					return text(`Created ${q(created.path)} from ${q(tpl.path)} with Templater.`);
+					return text(`Created ${quotePath(created.path)} from ${quotePath(tpl.path)} with Templater.`);
 				}
 				if (!core) throw new ToolError("Neither Templater nor core Templates is enabled.");
 				const content = fillCoreTemplate(await app.vault.read(tpl), name, core.options ?? {});
 				const created = await app.vault.create(dest, content);
-				return text(`Created ${q(created.path)} from ${q(tpl.path)} with core Templates.`);
+				return text(`Created ${quotePath(created.path)} from ${quotePath(tpl.path)} with core Templates.`);
 			}),
 			rw("Create from template"),
 		),
@@ -531,7 +516,7 @@ function toolDefinitions(host: ToolHost) {
 					return text(clip(String(await run({ path: file.path, ...(view ? { view } : {}), format: "json" }))));
 				} catch (err) {
 					// Obsidian's handler throws plain strings.
-					throw new ToolError(err instanceof Error ? err.message : String(err));
+					throw new ToolError(errorMessage(err));
 				}
 			}),
 			ro("Bases query"),
@@ -668,15 +653,6 @@ function show(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-/** A path as Apollo writes references: quoted if it has spaces, so the chat can make it a link. */
-function q(path: string): string {
-	return /\s/.test(path) ? `"${path}"` : path;
-}
-
-function plural(n: number, word: string): string {
-	return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
-
 function parentOf(path: string): string {
 	const i = path.lastIndexOf("/");
 	return i === -1 ? "" : path.slice(0, i);
@@ -709,13 +685,6 @@ const momentFn = moment as unknown as (input?: string, format?: string, strict?:
 
 // Other plugins, reached through Obsidian internals. Each may be missing.
 
-interface AppInternals {
-	plugins?: { enabledPlugins?: Set<string>; plugins?: Record<string, unknown> };
-	internalPlugins?: { getEnabledPluginById?(id: string): unknown };
-	cli?: { handlers?: Map<string, { handler?(flags: Record<string, unknown>): Promise<unknown> }> };
-	vault: { getConfig?(key: string): unknown };
-}
-
 interface DataviewApi {
 	queryMarkdown(query: string, originFile?: string): Promise<{ successful: true; value: string } | { successful: false; error: string }>;
 }
@@ -735,13 +704,6 @@ interface DailyNotes {
 	getFolder?(): TFolder | null;
 }
 
-const internals = (app: App) => app as unknown as AppInternals;
-
-function communityPlugin<T>(app: App, id: string): T | null {
-	const plugins = internals(app).plugins;
-	return plugins?.enabledPlugins?.has(id) ? ((plugins.plugins?.[id] as T | undefined) ?? null) : null;
-}
-
 function dataviewApi(app: App): DataviewApi | null {
 	return communityPlugin<{ api?: DataviewApi }>(app, "dataview")?.api ?? null;
 }
@@ -752,20 +714,15 @@ function templater(app: App): Templater | null {
 }
 
 function coreTemplates(app: App): CoreTemplates | null {
-	return (internals(app).internalPlugins?.getEnabledPluginById?.("templates") as CoreTemplates | null) ?? null;
+	return internalPlugin<CoreTemplates>(app, "templates");
 }
 
 function dailyNotes(app: App): DailyNotes | null {
-	return (internals(app).internalPlugins?.getEnabledPluginById?.("daily-notes") as DailyNotes | null) ?? null;
+	return internalPlugin<DailyNotes>(app, "daily-notes");
 }
 
 /** Obsidian's own `base:query` CLI handler, the only way to evaluate a base outside its view. */
 function basesQuery(app: App): ((flags: Record<string, unknown>) => Promise<unknown>) | null {
-	if (!internals(app).internalPlugins?.getEnabledPluginById?.("bases")) return null;
-	const handler = internals(app).cli?.handlers?.get("base:query");
-	return handler?.handler ? (flags) => handler.handler!(flags) : null;
+	return internalPlugin(app, "bases") ? cliHandler(app, "base:query") : null;
 }
 
-function getConfig(app: App, key: string): unknown {
-	return internals(app).vault.getConfig?.(key);
-}

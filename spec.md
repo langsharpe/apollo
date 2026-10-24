@@ -57,7 +57,7 @@ Key decisions:
 | TAB-1 | Each chat is an Obsidian leaf hosting a `ChatView`. Multiple chats can be open at once. |
 | TAB-2 | Setting: **Open new chats in** `tab` / `split right` / `split down` / `right sidebar`. Implemented with `workspace.getLeaf('tab')` or `getLeaf('split', direction)`. |
 | TAB-3 | Commands: *New chat*, *New chat in split*, *Close chat*, *Focus next chat*, *Focus previous chat*. All bindable to hotkeys. |
-| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** (proposed `Mod+Shift+N`, confirm no conflict in M0) via `addCommand({ hotkeys })`. If focus is in an empty tab, opens the chat in that tab. If focus is in a note, opens a new chat using the *Open new chats in* setting. Empty tabs also get a **New chat** button beside core's *New note* and *Go to file*, showing this hotkey. Also available as `/new` typed in the input. |
+| TAB-3a | **New chat in current pane** (the most-used action, equivalent of `/new`). Starts a fresh session in the focused chat pane; the previous session stays in the chat list. Ships with a **default hotkey** (`Mod+Alt+N`; `Mod+Shift+N` clashes with core's *New note in new pane*, see `docs/m0-findings.md`) via `addCommand({ hotkeys })`. If focus is in an empty tab, opens the chat in that tab. If focus is in a note, opens a new chat using the *Open new chats in* setting. Empty tabs also get a **New chat** button beside core's *New note* and *Go to file*, showing this hotkey. Also available as `/new` typed in the input. |
 | TAB-4 | Tab title = session title (first prompt summary, or user rename). Show a status dot: idle, running, awaiting permission, error. |
 | TAB-5 | Tab state (session ID, draft text, scroll position) persists through `getState`/`setState`, so Obsidian restores open chats on restart. |
 | TAB-6 | Idle tabs release their Claude Code process after a configurable timeout (default 10 min) and transparently resume on the next message. Note: releasing the process likely clears Claude Code's in-memory record of seen files, so native file-change notes stop for that session until files are read again. CHG-2 covers this once change awareness ships. |
@@ -69,7 +69,7 @@ Key decisions:
 | ID | Requirement |
 |---|---|
 | HIST-1 | A sidebar `SessionListView` lists sessions for this vault using the SDK's `listSessions({ dir: vaultPath })`, newest first. |
-| HIST-2 | Shows title, last updated, and whether it is open in a tab. Search by title. |
+| HIST-2 | Shows title and whether it is open in a tab. Search by title. |
 | HIST-3 | Actions: **Open** (resume in new tab, or focus if already open), **Fork** (`forkSession: true`), **Rename**, **Pin**, **Delete** (with confirm; uses SDK `deleteSession`). |
 | HIST-3a | **Fork from any message.** Every user and assistant message has a *Fork from here* action. It opens a new tab whose session branches at that message (`resume` + `resumeSessionAt: <message uuid>` + `forkSession: true`), leaving the original untouched. The forked tab's title records its parent, and the chat list can group forks under their parent. |
 | HIST-4 | Sessions started from the terminal in the vault directory appear in the list and can be resumed. Sessions started in the plugin can be resumed from the terminal with `claude --resume`. |
@@ -128,7 +128,7 @@ Requirements:
 | MCP-1 | Per-tab MCP status panel from `query.mcpServerStatus()`: name, source (user, project, managed, claude.ai connector), status, tool count. |
 | MCP-2 | **Disable claude.ai connectors** toggle → `disableClaudeAiConnectors: true` passed via inline `settings`. Targets the enterprise-provisioned connectors. |
 | MCP-3 | **Per-server deny list** (vault-level) → `deniedMcpServers` entries, matched by name (e.g. `claude.ai Slack`). |
-| MCP-4 | **Strict mode** toggle: only servers defined in the plugin's own list load (equivalent of `--strict-mcp-config`, passed via `extraArgs` if the SDK has no direct option). |
+| MCP-4 | **Strict mode** toggle: only servers defined in the plugin's own list load (equivalent of `--strict-mcp-config`, passed as the SDK's `strictMcpConfig` option). |
 | MCP-5 | Managed (`managed-mcp.json`) servers are shown as locked, with a note that they can't be overridden locally. |
 | MCP-6 | Changes apply to new sessions; open tabs show a *Reload to apply* banner. |
 
@@ -249,7 +249,7 @@ The vault currently has little frontmatter, so the emphasis is on tools that let
 | Skills folder / mode | Vault | Empty / Linked |
 | Reference insertion format | Vault | Plain path |
 | Default permission mode | Vault | Ask (options: Ask, Accept edits, Plan, Auto) |
-| New chat in current pane hotkey | Device | `Mod+Shift+N` |
+| New chat in current pane hotkey | Device | `Mod+Alt+N` |
 | Idle process timeout | Device | 10 min |
 | Max running processes | Device | 4 |
 | Default model | Vault | Opus (options: Opus, Sonnet, Fable, Haiku, labelled with their current versions) |
@@ -284,12 +284,12 @@ function buildOptions(s: Settings, chat: ChatState): Options {
     settings: {
       ...(s.outputStyle ? { outputStyle: s.outputStyle } : {}),
       ...(s.disableConnectors ? { disableClaudeAiConnectors: true } : {}),
-      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny } : {}),
+      ...(s.mcpDeny.length ? { deniedMcpServers: s.mcpDeny.map((serverName) => ({ serverName })) } : {}),
     },
     ...(s.skillsMode === 'plugin' ? { plugins: [{ type: 'local', path: skillsPluginPath }] } : {}),
     ...(s.obsidianTools ? { mcpServers: { apollo: apolloSdkServer(app, s.enabledObsidianTools) } } : {}),
+    ...(s.strictMcp ? { strictMcpConfig: true } : {}),
     extraArgs: {
-      ...(s.strictMcp ? { 'strict-mcp-config': null } : {}),
       ...(chat.permissionMode === 'auto' ? { 'enable-auto-mode': null } : {}),  // confirm in M0
     },
     permissionMode: chat.permissionMode,
@@ -311,7 +311,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 - **Process hygiene.** Every spawned process is tracked and killed on tab close, plugin unload and Obsidian quit.
 - **No telemetry.** Network traffic is only what Claude Code itself makes.
 - **Secrets.** Any values the plugin stores go in Obsidian's SecretStorage, not `data.json`.
-- **Bundling.** SDK marked external in esbuild; native binary resolved from the user's install, not bundled.
+- **Bundling.** The SDK is bundled into `main.js` (marking it external fails; see `docs/m0-findings.md`); the native `claude` binary stays external, resolved from the user's install.
 - **Startup cost.** Plugin load must not spawn processes; the first one starts on the first message.
 - **Debugging.** A *Debug: log raw requests* toggle sets `OTEL_LOG_RAW_API_BODIES=file:<dir>`, so the exact system prompt, tools and reminders can be inspected.
 
@@ -338,7 +338,7 @@ function buildOptions(s: Settings, chat: ChatState): Options {
 6. Symlinked `.claude/skills`: does Obsidian Sync or another sync tool in use replace symlinks? If so, Mode B becomes the default.
 7. Horizontal vs vertical naming in `getLeaf('split', ...)`: confirm which direction gives side-by-side panes.
 8. How does the SDK enable Claude Code's auto permission mode? Claudian passes an `enable-auto-mode` extra arg; confirm whether `permissionMode: 'auto'` alone is enough, and whether managed settings in the enterprise config allow it.
-9. Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine?
+9. Does `Mod+Shift+N` clash with a core Obsidian or commonly used plugin hotkey on this machine? *Resolved in M0: it does, so the default is `Mod+Alt+N`.*
 10. Fork from an *assistant* message: confirm `resumeSessionAt` accepts assistant message UUIDs as well as user ones, and what happens to tool calls mid-turn.
 11. Change awareness: capture the native file-changed reminder with raw-request logging on the current Claude Code version, to see its exact form, when it fires, and whether it survives resume. Informs CHG-6 wording and how much duplication to expect.
 12. Can SDK hook callbacks (`UserPromptSubmit`, `PostToolUse`) return `additionalContext` from in-process TypeScript, without shell hooks? Confirm the field name and placement in the current SDK.

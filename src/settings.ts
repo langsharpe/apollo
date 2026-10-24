@@ -1,63 +1,9 @@
-import type { EffortLevel, ModelInfo, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { Notice, PluginSettingTab, type App, type SettingDefinitionItem } from "obsidian";
 import { resolveShellEnv } from "./cli";
+import { EFFORT_LEVELS, modelOptions, PERMISSION_MODES, type ChatPermissionMode } from "./chat-options";
 import type ApolloPlugin from "./main";
 import { OBSIDIAN_TOOLS } from "./vault-tools";
-
-/** Permission modes a chat can use (PRM-T1). Bypass is deliberately absent in v1. */
-export const PERMISSION_MODES = {
-	default: "Ask",
-	acceptEdits: "Accept edits",
-	plan: "Plan",
-	auto: "Auto",
-} as const satisfies Partial<Record<PermissionMode, string>>;
-
-export type ChatPermissionMode = keyof typeof PERMISSION_MODES;
-
-/** Models offered before Claude Code has reported its list, which carries the versions. */
-const FALLBACK_MODELS: Record<string, string> = { opus: "Opus", sonnet: "Sonnet", fable: "Fable", haiku: "Haiku" };
-
-/**
- * The models a chat offers in its toolbar and settings: Claude Code's
- * aliases, which follow the latest version of each family, labelled with
- * that version ("Opus 5.5"). Pinned and older models stay in /model. A
- * current model outside the list is added rather than misreported; null is
- * Claude Code's own default.
- */
-export function modelOptions(models: ModelInfo[], current: string | null): Record<string, string> {
-	const aliases = models.filter((m) => m.value !== "default" && !m.value.startsWith("claude-"));
-	const options = aliases.length ? Object.fromEntries(aliases.map((m) => [m.value, m.displayName])) : { ...FALLBACK_MODELS };
-	const value = current ?? "default";
-	if (!(value in options)) options[value] = models.find((m) => m.value === value)?.displayName ?? (current ?? "Default");
-	return options;
-}
-
-/** Effort levels, lowest first (TAB-8). */
-export const EFFORT_LEVELS = {
-	low: "Low",
-	medium: "Medium",
-	high: "High",
-	xhigh: "Extra high",
-	max: "Max",
-} as const satisfies Record<EffortLevel, string>;
-
-/**
- * The effort levels a model supports, from Claude Code's model list, after
- * "default" for the model's own default. Empty for a model without effort
- * (Haiku). Every level is offered until the list arrives. A current level
- * the model lacks is added rather than misreported; Claude Code runs it at
- * the nearest level the model has.
- */
-export function effortOptions(models: ModelInfo[], model: string | null, current: EffortLevel | null): Record<string, string> {
-	const value = model ?? "default";
-	const info = models.find((m) => m.value === value) ?? models.find((m) => m.resolvedModel === value);
-	const levels = info ? (info.supportedEffortLevels ?? []) : (Object.keys(EFFORT_LEVELS) as EffortLevel[]);
-	if (!levels.length) return {};
-	const options: Record<string, string> = { default: "Default" };
-	for (const level of levels) options[level] = EFFORT_LEVELS[level];
-	if (current && !(current in options)) options[current] = EFFORT_LEVELS[current];
-	return options;
-}
 
 /** Where new chats open (TAB-2). */
 export const CHAT_PLACEMENTS = {
@@ -154,6 +100,9 @@ export const DEFAULT_SETTINGS: ApolloSettings = {
 /** Control keys for per-tool toggles, which are stored in `disabledObsidianTools`. */
 const TOOL_KEY = "obsidianTool:";
 
+/** The keys a setting control can use: a setting, or one Obsidian tool's switch. */
+type SettingKey = keyof ApolloSettings | `${typeof TOOL_KEY}${string}`;
+
 // The base PluginSettingTab reads `plugin.settings` by control key. Writes go
 // through the plugin, because data.json also holds chat metadata.
 export class ApolloSettingTab extends PluginSettingTab {
@@ -196,14 +145,14 @@ export class ApolloSettingTab extends PluginSettingTab {
 		return options;
 	}
 
-	override getSettingDefinitions(): SettingDefinitionItem[] {
+	override getSettingDefinitions(): SettingDefinitionItem<SettingKey>[] {
 		return [
 			{
 				name: "Claude CLI path",
 				desc: "Absolute path to the claude binary. Leave empty to auto-detect from your login shell.",
 				control: {
 					type: "text",
-					key: "cliPath" satisfies keyof ApolloSettings,
+					key: "cliPath",
 					validate: (value) => (value && !value.startsWith("/") ? "Must be an absolute path." : undefined),
 				},
 			},
@@ -221,7 +170,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Permission mode for new chats. Each chat can switch mode from its header. Auto needs a model that supports it; Haiku doesn't.",
 				control: {
 					type: "dropdown",
-					key: "defaultPermissionMode" satisfies keyof ApolloSettings,
+					key: "defaultPermissionMode",
 					options: PERMISSION_MODES,
 				},
 			},
@@ -230,7 +179,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Model for new chats. Each chat can switch model from its toolbar, or use /model for older versions.",
 				control: {
 					type: "dropdown",
-					key: "defaultModel" satisfies keyof ApolloSettings,
+					key: "defaultModel",
 					options: modelOptions(this.plugin.catalogue.models, this.plugin.settings.defaultModel),
 				},
 			},
@@ -239,7 +188,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "How much Claude thinks in new chats. Default uses each model's own level. Each chat can switch from its toolbar. Models without effort settings, like Haiku, ignore it.",
 				control: {
 					type: "dropdown",
-					key: "defaultEffort" satisfies keyof ApolloSettings,
+					key: "defaultEffort",
 					options: { default: "Default", ...EFFORT_LEVELS },
 				},
 			},
@@ -248,7 +197,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Output style for new chats.",
 				control: {
 					type: "dropdown",
-					key: "outputStyle" satisfies keyof ApolloSettings,
+					key: "outputStyle",
 					options: this.outputStyles(),
 				},
 			},
@@ -257,21 +206,21 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Where new chats, resumed chats and forks open.",
 				control: {
 					type: "dropdown",
-					key: "openChatsIn" satisfies keyof ApolloSettings,
+					key: "openChatsIn",
 					options: CHAT_PLACEMENTS,
 				},
 			},
 			{
 				name: "Show thinking and tool calls",
 				desc: "Show Claude's thinking and tool calls between messages. Off hides them; the status row still says what Claude is doing. Each chat can switch from a message's hover actions, its tab menu or the command.",
-				control: { type: "toggle", key: "showWork" satisfies keyof ApolloSettings },
+				control: { type: "toggle", key: "showWork" },
 			},
 			{
 				name: "Icon",
 				desc: "Apollo's icon on the ribbon, chat tabs, the New chat button and Add to chat menus.",
 				control: {
 					type: "dropdown",
-					key: "icon" satisfies keyof ApolloSettings,
+					key: "icon",
 					options: APOLLO_ICONS,
 				},
 			},
@@ -280,7 +229,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "How files and folders are added to the input, from @, drag and drop, paste and commands. A plain path costs nothing until Claude decides to read it; an @-mention attaches the file's contents to the message.",
 				control: {
 					type: "dropdown",
-					key: "referenceFormat" satisfies keyof ApolloSettings,
+					key: "referenceFormat",
 					options: REFERENCE_FORMATS,
 				},
 			},
@@ -289,7 +238,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 				desc: "Minutes before an idle chat stops its Claude Code process. The chat resumes on your next message. 0 keeps the process until the chat closes.",
 				control: {
 					type: "number",
-					key: "idleTimeoutMinutes" satisfies keyof ApolloSettings,
+					key: "idleTimeoutMinutes",
 					min: 0,
 					step: 1,
 				},
@@ -301,7 +250,7 @@ export class ApolloSettingTab extends PluginSettingTab {
 					{
 						name: "Include Obsidian tools",
 						desc: "Gives Claude tools that use Obsidian's own API: links and backlinks, outlines, frontmatter and tag edits, link-safe moves, trash, and opening notes for you to look at. They run inside Obsidian, so there's no extra process. Read-only tools run without asking; the rest follow the chat's permission mode. Applies from a chat's next Claude Code process.",
-						control: { type: "toggle", key: "obsidianTools" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "obsidianTools" },
 					},
 					{
 						type: "page",
@@ -321,22 +270,22 @@ export class ApolloSettingTab extends PluginSettingTab {
 					{
 						name: "Present: default placement",
 						desc: "Where workspace_present opens a note when Claude doesn't say. Auto reuses a note already open, then this chat's presentation pane, then a tab beside your last note, and otherwise splits the chat.",
-						control: { type: "dropdown", key: "presentPlacement" satisfies keyof ApolloSettings, options: PRESENT_PLACEMENTS },
+						control: { type: "dropdown", key: "presentPlacement", options: PRESENT_PLACEMENTS },
 					},
 					{
 						name: "Present: focus the note",
 						desc: "Move the cursor to a presented note. Off keeps it where it was, usually the chat input.",
-						control: { type: "toggle", key: "presentFocus" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "presentFocus" },
 					},
 					{
 						name: "Present: max per turn",
 						desc: "Notes Claude can open for you in one turn. Past the limit, it lists them as links instead.",
-						control: { type: "number", key: "presentMaxPerTurn" satisfies keyof ApolloSettings, min: 1, step: 1 },
+						control: { type: "number", key: "presentMaxPerTurn", min: 1, step: 1 },
 					},
 					{
 						name: "Auto-present new notes",
 						desc: "Open notes Claude creates with Write, the same way as workspace_present, within the same limit.",
-						control: { type: "toggle", key: "autoPresent" satisfies keyof ApolloSettings },
+						control: { type: "toggle", key: "autoPresent" },
 					},
 				],
 			},
