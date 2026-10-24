@@ -564,33 +564,7 @@ export class ChatView extends ItemView {
 		}
 		switch (msg.type) {
 			case "system":
-				if (msg.subtype === "init") {
-					// Claude Code starts a turn itself when a background agent reports back.
-					if (this.progress.inTurn) this.progress.setPhase(null);
-					else this.progress.begin();
-					this.reportedModel = msg.model;
-					this.reportedOutputStyle = msg.output_style;
-					this.updateInfo();
-					this.syncMode(msg.permissionMode);
-					// A new session now has an ID to save and list.
-					this.app.workspace.requestSaveLayout();
-					this.plugin.store.changed();
-				} else if (msg.subtype === "status") {
-					if (msg.permissionMode) this.syncMode(msg.permissionMode);
-					this.progress.setPhase(msg.status === "compacting" ? "compacting" : null);
-				} else if (msg.subtype === "api_retry") {
-					this.progress.setRetry(msg);
-				} else if (msg.subtype === "task_progress" && msg.tool_use_id) {
-					const task = this.session.tasks.byToolUse(msg.tool_use_id);
-					this.agentCalls.get(msg.tool_use_id)?.agentProgress(msg.tool_use_id, msg.summary || msg.description, msg.usage.tool_uses, task?.description ?? "");
-				} else if (msg.subtype === "task_notification" && msg.tool_use_id) {
-					this.agentEnded(msg.tool_use_id, msg.status, msg.usage ? agentTotals(msg.usage.tool_uses, msg.usage.duration_ms) : "");
-				} else if (msg.subtype === "permission_denied") {
-					const who = msg.decision_reason_type === "classifier" ? "Auto mode" : "Claude Code";
-					this.note(`${who} denied ${msg.tool_name}${msg.decision_reason ? `: ${msg.decision_reason}` : ""}`);
-				}
-				// Agents starting and ending change whether the chat is working.
-				this.refreshStatus();
+				this.handleSystem(msg);
 				break;
 			case "stream_event": {
 				const ev = msg.event;
@@ -659,6 +633,37 @@ export class ChatView extends ItemView {
 			if (step) return step;
 		}
 		return null;
+	}
+
+	/** The `system` messages: session start, status, retries, agent tasks and denials. */
+	private handleSystem(msg: Extract<SDKMessage, { type: "system" }>): void {
+		if (msg.subtype === "init") {
+			// Claude Code starts a turn itself when a background agent reports back.
+			if (this.progress.inTurn) this.progress.setPhase(null);
+			else this.progress.begin();
+			this.reportedModel = msg.model;
+			this.reportedOutputStyle = msg.output_style;
+			this.updateInfo();
+			this.syncMode(msg.permissionMode);
+			// A new session now has an ID to save and list.
+			this.app.workspace.requestSaveLayout();
+			this.plugin.store.changed();
+		} else if (msg.subtype === "status") {
+			if (msg.permissionMode) this.syncMode(msg.permissionMode);
+			this.progress.setPhase(msg.status === "compacting" ? "compacting" : null);
+		} else if (msg.subtype === "api_retry") {
+			this.progress.setRetry(msg);
+		} else if (msg.subtype === "task_progress" && msg.tool_use_id) {
+			const task = this.session.tasks.byToolUse(msg.tool_use_id);
+			this.agentCalls.get(msg.tool_use_id)?.agentProgress(msg.tool_use_id, msg.summary || msg.description, msg.usage.tool_uses, task?.description ?? "");
+		} else if (msg.subtype === "task_notification" && msg.tool_use_id) {
+			this.agentEnded(msg.tool_use_id, msg.status, msg.usage ? agentTotals(msg.usage.tool_uses, msg.usage.duration_ms) : "");
+		} else if (msg.subtype === "permission_denied") {
+			const who = msg.decision_reason_type === "classifier" ? "Auto mode" : "Claude Code";
+			this.note(`${who} denied ${msg.tool_name}${msg.decision_reason ? `: ${msg.decision_reason}` : ""}`);
+		}
+		// Agents starting and ending change whether the chat is working.
+		this.refreshStatus();
 	}
 
 	private onTurnEnd(subtype: string, durationMs: number): void {
@@ -927,27 +932,18 @@ export class ChatView extends ItemView {
 				return true;
 			case "effort": {
 				clearInput();
-				if (!arg) {
-					void this.pickEffort();
-					return true;
-				}
-				const level = parseEffortArg(arg);
-				if (level) void this.changeEffort(nullIfDefault(level));
+				const level = arg && parseEffortArg(arg);
+				if (!arg) void this.pickEffort();
+				else if (level) void this.changeEffort(nullIfDefault(level));
 				else new Notice(`Unknown effort “${arg}”. Use low, medium, high, xhigh, max or default.`);
 				return true;
 			}
 			case "mode": {
 				clearInput();
-				if (!arg) {
-					void this.pickMode();
-					return true;
-				}
-				const mode = parseModeArg(arg);
-				if (mode) {
-					void this.changeMode(mode);
-				} else {
-					new Notice(`Unknown mode “${arg}”. Use ask, accept-edits, plan or auto.`);
-				}
+				const mode = arg && parseModeArg(arg);
+				if (!arg) void this.pickMode();
+				else if (mode) void this.changeMode(mode);
+				else new Notice(`Unknown mode “${arg}”. Use ask, accept-edits, plan or auto.`);
 				return true;
 			}
 		}
