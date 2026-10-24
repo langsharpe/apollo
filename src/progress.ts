@@ -1,7 +1,7 @@
 import type { SDKAPIRetryMessage } from "@anthropic-ai/claude-agent-sdk";
 import { setIcon, type Component } from "obsidian";
 import type { Step } from "./tool-calls";
-import { formatDuration, plural } from "./format";
+import { agentTotals, formatDuration, plural } from "./format";
 import type { AgentTask } from "./tasks";
 
 /** What the progress line reports on, read fresh on every refresh. */
@@ -70,7 +70,7 @@ export class ProgressLine {
 	private turnStarted: number | null = null;
 	private lastEvent = 0;
 	private phase: Phase | null = null;
-	private retry: { text: string } | null = null;
+	private retryText: string | null = null;
 
 	constructor(
 		parent: HTMLElement,
@@ -96,14 +96,14 @@ export class ProgressLine {
 	begin(phase: Phase | null = null): void {
 		this.turnStarted = this.lastEvent = Date.now();
 		this.phase = phase;
-		this.retry = null;
+		this.retryText = null;
 		this.refresh();
 	}
 
 	/** The turn's result arrived. Agents may still be running. */
 	end(): void {
 		this.turnStarted = null;
-		this.retry = null;
+		this.retryText = null;
 		if (this.phase !== "stopping") this.phase = null;
 		this.refresh();
 	}
@@ -112,7 +112,7 @@ export class ProgressLine {
 	idle(): void {
 		this.turnStarted = null;
 		this.phase = null;
-		this.retry = null;
+		this.retryText = null;
 		this.refresh();
 	}
 
@@ -130,8 +130,8 @@ export class ProgressLine {
 
 	/** An API request failed and will be retried; null once output flows again. */
 	setRetry(msg: SDKAPIRetryMessage | null): void {
-		if (!msg && !this.retry) return;
-		this.retry = msg ? { text: `Retrying: ${RETRY_REASONS[msg.error] ?? (msg.error_status ? `API error ${msg.error_status}` : "connection error")} (attempt ${msg.attempt} of ${msg.max_retries})` } : null;
+		if (!msg && !this.retryText) return;
+		this.retryText = msg ? `Retrying: ${RETRY_REASONS[msg.error] ?? (msg.error_status ? `API error ${msg.error_status}` : "connection error")} (attempt ${msg.attempt} of ${msg.max_retries})` : null;
 		this.refresh();
 	}
 
@@ -148,8 +148,8 @@ export class ProgressLine {
 			label = "Waiting for your answer";
 			state = "awaiting";
 		} else if (this.phase === "starting") label = "Starting Claude Code…";
-		else if (this.retry) {
-			label = this.retry.text;
+		else if (this.retryText) {
+			label = this.retryText;
 			state = "warning";
 		} else if (this.phase === "compacting") label = "Compacting the conversation…";
 		else if (this.inTurn) {
@@ -177,7 +177,7 @@ export class ProgressLine {
 			const quiet = now - t.lastEvent >= AGENT_QUIET_AFTER;
 			const meta = quiet
 				? `No activity for ${formatDuration(now - t.lastEvent)}`
-				: [t.toolUses ? plural(t.toolUses, "tool") : "", formatDuration(now - t.started)].filter(Boolean).join(" · ");
+				: agentTotals(t.toolUses, now - t.started);
 			return { name: t.description || "Agent", activity: t.activity, meta, quiet };
 		});
 		const more = tasks.length - rows.length;
