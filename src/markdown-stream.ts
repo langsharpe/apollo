@@ -41,6 +41,11 @@ export class MarkdownStream {
 		el.append(this.tailMarker);
 	}
 
+	/** The Markdown received so far. */
+	get markdown(): string {
+		return this.text;
+	}
+
 	append(text: string): void {
 		this.text += text;
 		this.timer ??= window.setTimeout(() => {

@@ -59,16 +59,23 @@
 	margin-bottom: 0;
 }
 
+/* Your message: the bubble, with its actions below it on the right. */
 .apollo-msg.apollo-user {
 	align-self: flex-end;
 	max-width: 85%;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+}
+
+.apollo-user-bubble {
 	padding: var(--size-4-2) var(--size-4-3);
 	border-radius: var(--radius-m);
 	background: var(--background-modifier-hover);
 	white-space: pre-wrap;
 }
 
-.apollo-msg.apollo-user.is-queued {
+.apollo-msg.apollo-user.is-queued > .apollo-user-bubble {
 	opacity: 0.6;
 	border: 1px dashed var(--background-modifier-border);
 }
@@ -82,33 +89,31 @@
 	color: var(--text-error);
 }
 
-/* Per-message actions, shown on hover. */
+/* Actions under each message. Hidden, they keep their space, so hovering a message shows them without moving anything. */
 .apollo-msg-actions {
-	position: absolute;
-	top: calc(-1 * var(--size-4-3));
-	right: var(--size-4-1);
-	display: none;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: var(--radius-s);
-	background: var(--background-primary);
+	display: flex;
+	gap: var(--size-2-1);
+	/* The icons' padding sits outside the message's edge, so the icons line up with its text or bubble. */
+	margin: var(--size-2-1) calc(-1 * var(--size-2-3)) 0;
+	visibility: hidden;
+	font-family: var(--font-interface);
+	user-select: none;
 }
 
 .apollo-msg:hover > .apollo-msg-actions {
-	display: flex;
+	visibility: visible;
 }
 
-.apollo-msg-actions .clickable-icon {
-	padding: var(--size-2-1);
-}
-
-/* The work toggle is lit while thinking and tool calls show. */
+/* The brain icon is lit while thinking and tool calls show. */
 .apollo-msg-actions .apollo-work-toggle.is-active {
 	color: var(--interactive-accent);
 }
 
-/* Thinking and tool calls are hidden unless the setting or the chat shows them (RND-10). */
-.apollo-chat.apollo-hide-work .apollo-work,
-.apollo-chat.apollo-hide-work .apollo-skill {
+/* Thinking and tool calls are hidden unless the setting or the chat shows them, or their turn's brain icon does (RND-10). */
+.apollo-chat.apollo-hide-work .apollo-work:not(.apollo-turn-shown),
+.apollo-chat.apollo-hide-work .apollo-skill:not(.apollo-turn-shown),
+.apollo-work.apollo-turn-hidden,
+.apollo-skill.apollo-turn-hidden {
 	display: none;
 }
 
@@ -703,9 +708,9 @@
 	border-radius: var(--radius-l);
 	resize: none;
 	background: transparent;
-	/* Grows with its text from one row to five, then scrolls. */
+	/* Starts three rows high, so it's an easy target, and grows with its text to five, then scrolls. */
 	field-sizing: content;
-	min-height: calc(1lh + 2 * var(--size-4-2));
+	min-height: calc(3lh + 2 * var(--size-4-2));
 	max-height: calc(5lh + 2 * var(--size-4-2));
 	overflow-y: auto;
 }

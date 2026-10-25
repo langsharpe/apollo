@@ -39,7 +39,7 @@ Pick the model (Opus, Sonnet, Fable, Haiku, each shown with its current version,
 
 ### Thinking and tool calls
 
-Claude's thinking and tool calls between messages collapse into one row that summarises what it did ("Thought, read 3 files, ran 1 command"), with the files read or edited listed as links underneath. Click it to see the steps: each *Thought* row opens to the thinking summary, and each run of consecutive tool calls opens to its individual calls, where a failed call has a red dot. These rows are hidden unless **Show thinking and tool calls** (settings) is on; to switch one chat, hover a message and click the brain icon or double-click the status row while Claude works, which also open each row one level to its steps, or use the tab's ⋯ menu or run *Show or hide thinking and tool calls*.
+Claude's thinking and tool calls between messages collapse into one row that summarises what it did ("Thought, read 3 files, ran 1 command"), with the files read or edited listed as links underneath. Click it to see the steps: each *Thought* row opens to the thinking summary, and each run of consecutive tool calls opens to its individual calls, where a failed call has a red dot. These rows are hidden unless **Show thinking and tool calls** (settings) is on. To switch one chat, double-click the status row while Claude works, which also opens each row one level to its steps, or use the tab's ⋯ menu or run *Show or hide thinking and tool calls*. To see just one reply's steps, hover the message you sent and click the brain icon below it: that shows or hides the thinking and tool calls up to your next message, opened one level.
 
 ### The status row
 
@@ -59,7 +59,7 @@ A message you send scrolls to the top of the chat, so Claude's reply reads from 
 
 ### Chat list and forking
 
-**Claude chats** (the messages ribbon icon, or *Open chat list*) lists every Claude Code session for the vault, including ones started in the terminal. Click to open or resume; right-click to fork, rename, pin or delete. In an open chat, double-click the title above the transcript to rename it. Sessions are Claude Code's own transcripts, so `claude --resume` in the vault sees the same list. Hover a message and click the branch icon to fork from there. Forking from one of your messages puts it back in the input to edit and resend.
+**Claude chats** (the messages ribbon icon, or *Open chat list*) lists every Claude Code session for the vault, including ones started in the terminal. Click to open or resume; right-click to fork, rename, pin or delete. In an open chat, double-click the title above the transcript to rename it. Sessions are Claude Code's own transcripts, so `claude --resume` in the vault sees the same list. Hover one of your messages and click the branch icon below it to fork from there: the fork puts that message back in the input to edit and resend. Every message also has a copy icon, which copies its text as Markdown.
 
 ### Context and references
 
