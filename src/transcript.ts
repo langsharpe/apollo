@@ -11,6 +11,9 @@ import { filePath, toolKind, type Step } from "./tool-calls";
 import { contentBlocks, displayPrompt, INTERRUPTED, resultText, taskNotification } from "./transcript-history";
 import { WorkSection } from "./work";
 
+/** One of your messages that has gone out: the start of a turn. */
+const SENT_MESSAGE = ".apollo-user:not(.is-queued)";
+
 /** What an Agent call returns when the agent goes to the background. */
 const BACKGROUND_AGENT = "Async agent launched";
 
@@ -25,10 +28,10 @@ export interface TranscriptHost {
 	tasks(): AgentTasks;
 	/** Thinking and tool calls are showing in this chat. */
 	showWork(): boolean;
-	/** A message's brain icon was clicked: show or hide thinking and tool calls, keeping `anchor` in place. */
-	toggleWork(anchor: HTMLElement): void;
-	/** A message's fork action was clicked (HIST-3a). */
-	fork(uuid: string, role: "user" | "assistant"): void;
+	/** Runs `change`, keeping `anchor` where it is on screen. */
+	keepInPlace(anchor: HTMLElement, change: () => void): void;
+	/** One of your messages' fork action was clicked (HIST-3a). */
+	fork(uuid: string): void;
 }
 
 /**
@@ -44,8 +47,6 @@ export class Transcript {
 	private textStarted = 0;
 	/** The thinking block streaming now, if any. */
 	private thinking: ThinkingBlock | null = null;
-	/** Streamed text blocks waiting for their message UUID, which arrives with the assistant message. */
-	private textAwaitingUuid: HTMLElement[] = [];
 	/** Marks a tool call done or failed, by tool_use id, with the result's text. */
 	private toolResults = new Map<string, (isError: boolean, output: string) => void>();
 	/** Write calls that will create a note, by tool_use id, for auto-present (OBS-19). */
@@ -54,8 +55,10 @@ export class Transcript {
 	private sections: WorkSection[] = [];
 	/** The group holding each Agent call, by tool_use id, for the agent's progress and edits (RND-9). */
 	private agentCalls = new Map<string, ActivityGroup>();
-	/** New work sections open as they're added, after the brain icon or the status row showed them, until they're hidden again. */
+	/** New work sections open as they're added, after the status row showed them, until they're hidden again. */
 	private expandWork = false;
+	/** Turns shown or hidden from their brain icon, apart from the chat, keyed by the message they follow (`turnHead`). */
+	private turnWork = new WeakMap<HTMLElement, boolean>();
 
 	constructor(
 		readonly el: HTMLElement,
@@ -78,7 +81,6 @@ export class Transcript {
 		this.textStream?.cancel();
 		this.textStream = null;
 		this.thinking = null;
-		this.textAwaitingUuid = [];
 		this.toolResults.clear();
 		this.newNotes.clear();
 		this.sections = [];
@@ -99,20 +101,39 @@ export class Transcript {
 		this.el.createDiv({ cls: `apollo-msg ${cls}`, text });
 	}
 
+	/**
+	 * One of your messages: the bubble, with the brain icon and copy below it.
+	 * The brain sits here because a turn's thinking comes right after the
+	 * message. Fork joins them once the message's UUID is known (`addFork`).
+	 */
 	userBubble(text: string): HTMLElement {
 		const el = this.el.createDiv({ cls: "apollo-msg apollo-user" });
-		renderWithReferences(el, text, this.app, this.plugin.vaultPath());
+		renderWithReferences(el.createDiv({ cls: "apollo-user-bubble" }), text, this.app, this.plugin.vaultPath());
+		const work = createDiv({ cls: "clickable-icon apollo-work-toggle" });
+		this.messageActions(el, () => text).prepend(work);
+		this.renderWorkToggle(work);
+		this.host.component.registerDomEvent(work, "click", (evt) => {
+			evt.stopPropagation();
+			this.toggleTurnWork(el);
+		});
 		return el;
+	}
+
+	/** A reply from Claude, with copy below it. Returns the element its Markdown goes in. */
+	private assistantMessage(text: () => string): HTMLElement {
+		const el = this.el.createDiv({ cls: "apollo-msg apollo-assistant" });
+		const body = el.createDiv({ cls: "markdown-rendered" });
+		this.messageActions(el, text);
+		return body;
 	}
 
 	// Streaming
 
 	startText(): void {
 		this.finishStreaming();
-		const el = this.el.createDiv({ cls: "apollo-msg apollo-assistant" });
-		this.textStream = new MarkdownStream(el.createDiv({ cls: "markdown-rendered" }), (text, out, component) => this.renderMarkdown(text, out, component), this.host.component);
+		const stream = new MarkdownStream(this.assistantMessage(() => stream.markdown), (text, out, component) => this.renderMarkdown(text, out, component), this.host.component);
+		this.textStream = stream;
 		this.textStarted = Date.now();
-		this.textAwaitingUuid.push(el);
 	}
 
 	appendText(text: string): void {
@@ -136,17 +157,10 @@ export class Transcript {
 		this.textStream = null;
 	}
 
-	/** The assistant message that holds the next streamed text arrived: its reply gets the message actions. */
-	textMessage(uuid: string): void {
-		const el = this.textAwaitingUuid.shift();
-		if (el) this.addMessageActions(el, uuid, "assistant");
-	}
-
-	/** The turn ended: nothing streamed is waiting for a UUID, and calls without results are settled. */
+	/** The turn ended: calls without results are settled. */
 	endTurn(): void {
 		this.finishStreaming();
 		this.settleActivities();
-		this.textAwaitingUuid = [];
 	}
 
 	/** What the turn is waiting on: a reply streaming in, or the latest thinking or tool call (RND-8). */
@@ -161,22 +175,86 @@ export class Transcript {
 
 	// Work
 
-	/** Shows each section open or closed. `expand` also makes new sections open as they're added. */
+	/**
+	 * The chat shows or hides its thinking and tool calls: turns go back to
+	 * following it, and each section opens or closes to match. `expand` also
+	 * makes new sections open as they're added.
+	 */
 	setWorkOpen(show: boolean, expand: boolean): void {
+		this.turnWork = new WeakMap();
+		for (const el of Array.from(this.el.querySelectorAll(".apollo-turn-shown, .apollo-turn-hidden"))) el.removeClasses(["apollo-turn-shown", "apollo-turn-hidden"]);
 		this.expandWork = show && expand;
 		if (this.expandWork || !show) for (const section of this.sections) section.setOpen(show);
 	}
 
-	/** Redraws the brain icons on messages after showing or hiding work changed. */
+	/**
+	 * Shows or hides the thinking and tool calls of the turn after one of your
+	 * messages, from its brain icon, whatever the chat shows (RND-10). Showing
+	 * them opens each section one level; hiding closes them again.
+	 */
+	private toggleTurnWork(el: HTMLElement): void {
+		// A queued message has no turn yet.
+		if (el.hasClass("is-queued")) return;
+		const head = this.turnHead(el);
+		const show = !this.turnShowsWork(head);
+		this.turnWork.set(head, show);
+		this.host.keepInPlace(el, () => {
+			for (const work of this.turnElements(head)) this.applyTurnWork(work, show);
+			this.renderWorkToggles();
+		});
+	}
+
+	/** Whether the turn after one of your messages shows its thinking and tool calls: its own choice, or else the chat's. */
+	private turnShowsWork(el: HTMLElement): boolean {
+		return this.turnWork.get(this.turnHead(el)) ?? this.host.showWork();
+	}
+
+	/** The message a turn's work follows: the last of the messages sent together. Queued messages haven't been sent yet. */
+	private turnHead(el: HTMLElement): HTMLElement {
+		let next = el.nextElementSibling;
+		while (next instanceof HTMLElement && next.matches(SENT_MESSAGE)) {
+			el = next;
+			next = el.nextElementSibling;
+		}
+		return el;
+	}
+
+	/** The sections and skill rows of the turn after `head`, up to the next message you sent. */
+	private turnElements(head: HTMLElement): HTMLElement[] {
+		const els: HTMLElement[] = [];
+		for (let el = head.nextElementSibling; el instanceof HTMLElement && !el.matches(SENT_MESSAGE); el = el.nextElementSibling) {
+			if (el.matches(".apollo-work, .apollo-skill")) els.push(el);
+		}
+		return els;
+	}
+
+	/** A section or skill row just added follows its turn's brain icon, if that was used. */
+	private followTurnWork(el: HTMLElement): boolean {
+		let prev = el.previousElementSibling;
+		while (prev && !prev.matches(SENT_MESSAGE)) prev = prev.previousElementSibling;
+		const show = prev instanceof HTMLElement ? this.turnWork.get(prev) : undefined;
+		if (show === undefined) return false;
+		this.applyTurnWork(el, show);
+		return true;
+	}
+
+	private applyTurnWork(el: HTMLElement, show: boolean): void {
+		el.toggleClass("apollo-turn-shown", show);
+		el.toggleClass("apollo-turn-hidden", !show);
+		this.sections.find((section) => section.el === el)?.setOpen(show);
+	}
+
+	/** Redraws the brain icons on your messages after showing or hiding work changed. */
 	renderWorkToggles(): void {
 		for (const el of Array.from(this.el.querySelectorAll<HTMLElement>(".apollo-work-toggle"))) this.renderWorkToggle(el);
 	}
 
 	private renderWorkToggle(el: HTMLElement): void {
-		const show = this.host.showWork();
+		const message = el.closest<HTMLElement>(".apollo-user");
+		const show = message ? this.turnShowsWork(message) : this.host.showWork();
 		setIcon(el, show ? "brain" : "brain-circuit");
 		el.toggleClass("is-active", show);
-		setTooltip(el, show ? "Hide thinking and tool calls" : "Show thinking and tool calls");
+		setTooltip(el, show ? "Hide thinking and tool calls for this message" : "Show thinking and tool calls for this message");
 	}
 
 	/** Marks calls that will never get a result as stopped. Background agents carry on unless `all`. */
@@ -189,8 +267,8 @@ export class Transcript {
 		const last = this.sections[this.sections.length - 1];
 		if (last && last.el === this.el.lastElementChild) return last;
 		const section = new WorkSection(this.el, this.app, this.plugin.vaultPath(), (text, el) => this.renderMarkdown(text, el));
-		if (this.expandWork && this.host.showWork()) section.setOpen(true);
 		this.sections.push(section);
+		if (!this.followTurnWork(section.el) && this.expandWork && this.host.showWork()) section.setOpen(true);
 		return section;
 	}
 
@@ -278,6 +356,7 @@ export class Transcript {
 			nameEl.dataset.skillPath = path;
 			setTooltip(nameEl, path);
 		}
+		this.followTurnWork(row);
 		return row;
 	}
 
@@ -290,23 +369,38 @@ export class Transcript {
 
 	// Messages
 
-	/** Hover actions on a message: show or hide thinking and tool calls, and "Fork from here" (HIST-3a). */
-	addMessageActions(el: HTMLElement, uuid: string, role: "user" | "assistant"): void {
-		if (el.querySelector(":scope > .apollo-msg-actions")) return;
-		const component = this.host.component;
+	/**
+	 * The row of actions under a message, with Copy (RND-5) at its end. It keeps
+	 * its space when hidden, so showing it on hover moves nothing.
+	 */
+	private messageActions(el: HTMLElement, text: () => string): HTMLElement {
 		const actions = el.createDiv({ cls: "apollo-msg-actions" });
-		const work = actions.createDiv({ cls: "clickable-icon apollo-work-toggle" });
-		this.renderWorkToggle(work);
-		component.registerDomEvent(work, "click", (evt) => {
+		const copy = actions.createDiv({ cls: "clickable-icon" });
+		setIcon(copy, "copy");
+		setTooltip(copy, "Copy text");
+		let reset = 0;
+		this.host.component.registerDomEvent(copy, "click", (evt) => {
 			evt.stopPropagation();
-			this.host.toggleWork(el);
+			void navigator.clipboard.writeText(text()).then(() => {
+				setIcon(copy, "check");
+				window.clearTimeout(reset);
+				reset = window.setTimeout(() => setIcon(copy, "copy"), 1500);
+			});
 		});
-		const fork = actions.createDiv({ cls: "clickable-icon" });
+		return actions;
+	}
+
+	/** Adds "Fork from here" to one of your messages, before copy, once its UUID is known (HIST-3a). */
+	addFork(el: HTMLElement, uuid: string): void {
+		const actions = el.querySelector(":scope > .apollo-msg-actions");
+		if (!actions || actions.querySelector(":scope > .apollo-fork")) return;
+		const fork = createDiv({ cls: "clickable-icon apollo-fork" });
+		actions.lastElementChild?.before(fork);
 		setIcon(fork, "git-branch");
-		setTooltip(fork, role === "user" ? "Fork from here, to edit and resend this message" : "Fork from here");
-		component.registerDomEvent(fork, "click", (evt) => {
+		setTooltip(fork, "Fork from here, to edit and resend this message");
+		this.host.component.registerDomEvent(fork, "click", (evt) => {
 			evt.stopPropagation();
-			this.host.fork(uuid, role);
+			this.host.fork(uuid);
 		});
 	}
 
@@ -340,15 +434,14 @@ export class Transcript {
 				const prompt = displayPrompt(text);
 				if (prompt === INTERRUPTED) this.note("Stopped.");
 				else if (prompt) {
-					this.addMessageActions(this.userBubble(prompt), msg.uuid, "user");
+					this.addFork(this.userBubble(prompt), msg.uuid);
 					this.skillRowForCommand(prompt);
 				}
 			} else if (msg.type === "assistant") {
 				for (const block of blocks) {
 					if (block.type === "text" && block.text) {
-						const el = this.el.createDiv({ cls: "apollo-msg apollo-assistant" });
-						renders.push(this.renderMarkdown(block.text, el.createDiv()));
-						this.addMessageActions(el, msg.uuid, "assistant");
+						const text = block.text;
+						renders.push(this.renderMarkdown(text, this.assistantMessage(() => text)));
 					} else if (block.type === "thinking" && block.thinking) {
 						const thinking = this.workSection().thinking();
 						thinking.append(block.thinking);

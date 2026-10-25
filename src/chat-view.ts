@@ -126,8 +126,8 @@ export class ChatView extends ItemView {
 			presenter: this.presenter,
 			tasks: () => this.session.tasks,
 			showWork: () => this.showWork,
-			toggleWork: (anchor) => this.setShowWork(!this.showWork, anchor, true),
-			fork: (uuid, role) => this.forkFrom(uuid, role),
+			keepInPlace: (anchor, change) => this.scroller.keepInPlace(anchor, change),
+			fork: (uuid) => this.forkFrom(uuid),
 		});
 		// Shown at the end of the transcript from send until the turn and its agents end, including while a process starts (RND-8).
 		this.progress = new ProgressLine(this.scrollEl, this, {
@@ -234,7 +234,7 @@ export class ChatView extends ItemView {
 		super.onPaneMenu(menu, source);
 		menu.addItem((item) =>
 			item
-				.setSection("view")
+				.setSection("action")
 				.setTitle("Show thinking and tool calls")
 				.setIcon("brain")
 				.setChecked(this.showWork)
@@ -419,7 +419,7 @@ export class ChatView extends ItemView {
 		if (!this.sessionId && this.title === NEW_CHAT_TITLE) this.setTitle(titleFromPrompt(text));
 		try {
 			const uuid = await this.session.send(text);
-			for (const el of bubbles) this.transcript.addMessageActions(el, uuid, "user");
+			for (const el of bubbles) this.transcript.addFork(el, uuid);
 			this.updateInfo();
 		} catch (err) {
 			this.onSessionError(err);
@@ -546,9 +546,6 @@ export class ChatView extends ItemView {
 				// Text arrives through stream events; tool calls are shown once their input is complete.
 				for (const block of msg.message.content) {
 					if (block.type === "tool_use") this.transcript.toolRow(block.id, block.name, block.input as Record<string, unknown>);
-					else if (block.type === "text") {
-						this.transcript.textMessage(msg.uuid);
-					}
 				}
 				if (msg.error) this.transcript.note(`Error: ${msg.error}`, "apollo-error");
 				break;
@@ -577,14 +574,14 @@ export class ChatView extends ItemView {
 		}
 	}
 
-	/** Forks the chat at a message, from its hover action (HIST-3a). */
-	private forkFrom(uuid: string, role: "user" | "assistant"): void {
+	/** Forks the chat before one of your messages, from its fork action, to edit and resend it (HIST-3a). */
+	private forkFrom(uuid: string): void {
 		const id = this.sessionId;
 		if (!id) {
 			new Notice("This chat has no session yet.");
 			return;
 		}
-		void this.plugin.forkChat(id, { uuid, role });
+		void this.plugin.forkChat(id, { uuid, role: "user" });
 	}
 
 	/** The `system` messages: session start, status, retries, agent tasks and denials. */
