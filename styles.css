@@ -47,6 +47,8 @@
 	font-family: var(--font-text);
 	font-size: var(--font-text-size);
 	line-height: var(--line-height-normal);
+	/* Notes get this from their view, not .markdown-rendered, so a long URL or inline code would run off the pane. */
+	overflow-wrap: break-word;
 }
 
 .apollo-msg .markdown-rendered > :first-child,
@@ -73,6 +75,8 @@
 	border-radius: var(--radius-m);
 	background: var(--background-modifier-hover);
 	white-space: pre-wrap;
+	/* "anywhere" rather than "break-word", so a long URL also shrinks the bubble's fitted width and wraps inside the view. */
+	overflow-wrap: anywhere;
 }
 
 .apollo-msg.apollo-user.is-queued > .apollo-user-bubble {
